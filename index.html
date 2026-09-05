@@ -11,8 +11,8 @@
         .row { display: flex; flex-wrap: wrap; gap: 20px; }
         .column { flex: 1; min-width: 300px; }
         video, canvas { width: 100%; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-        .status { font-size: 1.2em; font-weight: bold; margin: 10px 0; }
-        .score { color: #2e7d32; }
+        .status { font-size: 1.0em; font-weight: bold; margin: 10px 0; }
+        .score { color: #2e7d32; font-weight: bold; margin-left: 8px; }
         button { background: #1a3a5c; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 1em; cursor: pointer; }
         button:hover { background: #0f2a44; }
         input[type="file"] { margin: 10px 0; }
@@ -24,7 +24,7 @@
 <p><strong>Preserves diagnostic motion – obfuscates identity</strong></p>
 
 <input type="file" id="videoInput" accept="video/*">
-<button onclick="processVideo()">Process Video</button>
+<button id="processBtn">Process Video</button>
 <div class="row">
     <div class="column">
         <h3>Original</h3>
@@ -46,191 +46,239 @@
 
 <script>
 let cvReady = false;
-let cv = null;
+let cascade = null;
 
 function onOpenCvReady() {
     cvReady = true;
-    cv = cv;
-    console.log("OpenCV.js ready");
+    console.log('OpenCV.js ready');
 }
 
-// Convert video frame to cv.Mat
-function videoToMat(videoElement) {
-    const canvas = document.getElementById('canvas');
-    canvas.width = videoElement.videoWidth;
-    canvas.height = videoElement.videoHeight;
-    const ctx = canvas.getContext('2d');
-    ctx.drawImage(videoElement, 0, 0);
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    let mat = cv.matFromImageData(imageData);
-    return mat;
+// Load Haar cascade XML into OpenCV.js FS and create classifier
+async function loadFaceCascade() {
+    if (!cvReady) throw new Error('OpenCV.js not ready');
+    if (cascade) return cascade;
+    const url = 'https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml';
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('Failed to fetch cascade XML');
+    const buf = await res.arrayBuffer();
+    const data = new Uint8Array(buf);
+    // write to Emscripten FS
+    try {
+        cv.FS_createDataFile('/', 'haarcascade_frontalface_default.xml', data, true, false, false);
+    } catch (e) {
+        // might already exist
+        console.log('FS_createDataFile:', e.message || e);
+    }
+    const cls = new cv.CascadeClassifier();
+    const loaded = cls.load('haarcascade_frontalface_default.xml');
+    if (!loaded) throw new Error('Failed to load Haar cascade into CascadeClassifier');
+    cascade = cls;
+    return cascade;
 }
 
-function processVideo() {
+function computePearson(a, b) {
+    if (a.length !== b.length || a.length === 0) return 0;
+    const n = a.length;
+    let sumA=0, sumB=0;
+    for (let i=0;i<n;i++){ sumA+=a[i]; sumB+=b[i]; }
+    const meanA = sumA/n; const meanB = sumB/n;
+    let num=0, denA=0, denB=0;
+    for (let i=0;i<n;i++){
+        const da = a[i]-meanA; const db = b[i]-meanB;
+        num += da*db; denA += da*da; denB += db*db;
+    }
+    return num / (Math.sqrt(denA*denB) + 1e-10);
+}
+
+document.getElementById('processBtn').addEventListener('click', async () => {
     const input = document.getElementById('videoInput');
     const file = input.files[0];
-    if (!file) {
-        alert('Please select a video file.');
-        return;
-    }
-
-    if (!cvReady) {
-        alert('OpenCV.js is still loading. Please wait a moment and try again.');
-        return;
-    }
+    const statusText = document.getElementById('statusText');
+    const scoreText = document.getElementById('scoreText');
+    scoreText.innerText = '';
+    if (!file) { alert('Please select a video file.'); return; }
+    if (!cvReady) { alert('OpenCV.js is still loading. Please wait.'); return; }
 
     const origVideo = document.getElementById('origVideo');
     const firewallVideo = document.getElementById('firewallVideo');
-    const statusText = document.getElementById('statusText');
-    const scoreText = document.getElementById('scoreText');
-
     const url = URL.createObjectURL(file);
     origVideo.src = url;
     origVideo.load();
 
-    // We need to wait for metadata to get dimensions
-    origVideo.onloadedmetadata = function() {
+    statusText.innerText = 'Preparing...';
+
+    try {
+        await new Promise((resolve) => { origVideo.onloadedmetadata = resolve; });
         const width = origVideo.videoWidth;
         const height = origVideo.videoHeight;
         const canvas = document.getElementById('canvas');
-        canvas.width = width;
-        canvas.height = height;
+        canvas.width = width; canvas.height = height;
         const ctx = canvas.getContext('2d');
 
-        // Capture frames
-        const frameCount = 60;
-        const frames = [];
-        const processedFrames = [];
-        let captured = 0;
-        let interval;
+        // Output canvas for recording
+        const outCanvas = document.createElement('canvas');
+        outCanvas.width = width; outCanvas.height = height;
+        const outCtx = outCanvas.getContext('2d');
 
-        function captureFrame() {
-            if (captured >= frameCount || origVideo.paused || origVideo.ended) {
-                clearInterval(interval);
-                // Now compute motion score
-                computeAndDisplay(frames, processedFrames);
-                return;
-            }
-            ctx.drawImage(origVideo, 0, 0, width, height);
-            const imageData = ctx.getImageData(0, 0, width, height);
-            let mat = cv.matFromImageData(imageData);
-            frames.push(mat.clone());
-
-            // Apply firewall: detect face and blur upper part
-            let gray = new cv.Mat();
-            cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
-            let faces = new cv.RectVector();
-            let cascade = new cv.CascadeClassifier();
-            cascade.load(cv.haarcascade_frontalface_default);
-            cascade.detectMultiScale(gray, faces, 1.1, 4);
-            let mask = cv.Mat.zeros(mat.rows, mat.cols, cv.CV_8U);
-            if (faces.size() > 0) {
-                let rect = faces.get(0);
-                // Draw ellipse mask on upper face
-                let center = new cv.Point(rect.x + rect.width/2, rect.y + rect.height*0.4);
-                let axes = new cv.Size(rect.width*0.45, rect.height*0.3);
-                cv.ellipse(mask, center, axes, 0, 0, 360, new cv.Scalar(255), -1);
-                // Blur only mask area
-                let blurred = new cv.Mat();
-                cv.GaussianBlur(mat, blurred, new cv.Size(51,51), 0);
-                mat.copyTo(blurred, mask);
-                processedFrames.push(blurred.clone());
-                blurred.delete();
-            } else {
-                processedFrames.push(mat.clone());
-            }
-            faces.delete();
-            gray.delete();
-            mask.delete();
-            captured++;
-            // Advance video by 2 frames (skip for speed)
-            origVideo.currentTime += 0.1;
-        }
-
-        origVideo.play();
-        interval = setInterval(captureFrame, 50);
-        origVideo.pause(); // pause after playback
-    };
-
-    function computeAndDisplay(frames, processedFrames) {
-        if (frames.length < 2) {
-            statusText.innerText = 'Not enough frames captured.';
-            return;
-        }
-
-        // Compute motion score: correlation of frame differences
-        const origFlattened = frames.map(m => Array.from(m.data));
-        const procFlattened = processedFrames.map(m => Array.from(m.data));
-        const origDiff = [];
-        const procDiff = [];
-        for (let i = 0; i < origFlattened.length - 1; i++) {
-            const diff = origFlattened[i+1].map((v, idx) => v - origFlattened[i][idx]);
-            origDiff.push(diff);
-            const pdiff = procFlattened[i+1].map((v, idx) => v - procFlattened[i][idx]);
-            procDiff.push(pdiff);
-        }
-        // Flatten all diffs
-        const allOrig = origDiff.flat();
-        const allProc = procDiff.flat();
-        // Correlation coefficient
-        const meanOrig = allOrig.reduce((a,b)=>a+b,0) / allOrig.length;
-        const meanProc = allProc.reduce((a,b)=>a+b,0) / allProc.length;
-        let num = 0, denOrig = 0, denProc = 0;
-        for (let i = 0; i < allOrig.length; i++) {
-            num += (allOrig[i] - meanOrig) * (allProc[i] - meanProc);
-            denOrig += (allOrig[i] - meanOrig) ** 2;
-            denProc += (allProc[i] - meanProc) ** 2;
-        }
-        const score = num / (Math.sqrt(denOrig * denProc) + 1e-10);
-        const finalScore = Math.max(0, score);
-        statusText.innerText = 'Motion Preservation Score:';
-        scoreText.innerText = finalScore.toFixed(3);
-        if (finalScore >= 0.85) {
-            scoreText.style.color = '#2e7d32';
-            scoreText.innerText += ' 🏆 (PROMISING)';
-        } else if (finalScore >= 0.70) {
-            scoreText.style.color = '#ed6c02';
-            scoreText.innerText += ' (GOOD)';
-        } else {
-            scoreText.style.color = '#d32f2f';
-            scoreText.innerText += ' (NEEDS TUNING)';
-        }
-
-        // Create output video from processed frames
-        const canvas2 = document.createElement('canvas');
-        canvas2.width = frames[0].cols;
-        canvas2.height = frames[0].rows;
-        const ctx2 = canvas2.getContext('2d');
-        const stream = canvas2.captureStream(10);
-        const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+        // prepare recorder
+        const stream = outCanvas.captureStream(15);
+        let mimeType = 'video/webm';
+        if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = '';
+        const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
         const chunks = [];
-        recorder.ondataavailable = e => chunks.push(e.data);
+        recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
         recorder.onstop = () => {
             const blob = new Blob(chunks, { type: 'video/webm' });
-            const url = URL.createObjectURL(blob);
-            firewallVideo.src = url;
-            firewallVideo.load();
-            firewallVideo.play();
+            const outUrl = URL.createObjectURL(blob);
+            firewallVideo.src = outUrl; firewallVideo.load(); firewallVideo.play();
         };
+
+        // Load cascade once
+        await loadFaceCascade();
+
+        // Mats allocation (reused)
+        const src = new cv.Mat(height, width, cv.CV_8UC4);
+        const rgba = new cv.Mat();
+        const grayFull = new cv.Mat();
+        const smallGray = new cv.Mat();
+        const prevOrig = new cv.Mat();
+        const prevProc = new cv.Mat();
+        const diff = new cv.Mat();
+
+        const smallW = 160;
+        const smallH = Math.max(1, Math.round((smallW * height) / width));
+
+        const origMags = [];
+        const procMags = [];
+        const maxFrames = 60;
+        let processedFrames = 0;
+
+        statusText.innerText = 'Processing frames...';
         recorder.start();
-        // Draw each frame
-        let idx = 0;
-        const interval2 = setInterval(() => {
-            if (idx >= processedFrames.length) {
-                clearInterval(interval2);
-                recorder.stop();
+
+        // Frame processing callback
+        const handleFrame = (now, metadata) => {
+            if (processedFrames >= maxFrames || origVideo.ended) {
+                finalize();
                 return;
             }
-            const mat = processedFrames[idx];
-            const imageData = new ImageData(new Uint8ClampedArray(mat.data), mat.cols, mat.rows);
-            ctx2.putImageData(imageData, 0, 0);
-            idx++;
-        }, 100);
-        // Clean up mats
-        frames.forEach(m => m.delete());
-        processedFrames.forEach(m => m.delete());
+            // draw current frame to temp canvas
+            ctx.drawImage(origVideo, 0, 0, width, height);
+            const imageData = ctx.getImageData(0,0,width,height);
+            // copy to src mat
+            src.data.set(imageData.data);
+
+            // Detect faces on grayscale full
+            cv.cvtColor(src, grayFull, cv.COLOR_RGBA2GRAY);
+            const faces = new cv.RectVector();
+            cascade.detectMultiScale(grayFull, faces, 1.1, 4);
+
+            // Create anonymized frame in a Mat (we will blur region)
+            let outMat = new cv.Mat();
+            src.copyTo(outMat);
+
+            if (faces.size() > 0) {
+                const r = faces.get(0);
+                const center = new cv.Point(r.x + r.width/2, r.y + Math.round(r.height*0.4));
+                const axes = new cv.Size(Math.round(r.width*0.5), Math.round(r.height*0.35));
+                const mask = new cv.Mat.zeros(outMat.rows, outMat.cols, cv.CV_8U);
+                cv.ellipse(mask, center, axes, 0, 0, 360, new cv.Scalar(255), -1);
+                const blurred = new cv.Mat();
+                cv.GaussianBlur(outMat, blurred, new cv.Size(51,51), 0);
+                // copy only mask area from blurred into outMat
+                blurred.copyTo(outMat, mask);
+                mask.delete(); blurred.delete();
+            }
+
+            // For motion metric: compute on downsampled grayscale
+            cv.cvtColor(src, smallGray, cv.COLOR_RGBA2GRAY);
+            cv.resize(smallGray, smallGray, new cv.Size(smallW, smallH));
+            if (!prevOrig.empty()) {
+                cv.absdiff(smallGray, prevOrig, diff);
+                const sum = cv.sumElems(diff)[0];
+                origMags.push(sum / (smallW*smallH));
+            }
+            smallGray.copyTo(prevOrig);
+
+            // For processed frame motion
+            cv.cvtColor(outMat, grayFull, cv.COLOR_RGBA2GRAY);
+            cv.resize(grayFull, grayFull, new cv.Size(smallW, smallH));
+            if (!prevProc.empty()) {
+                cv.absdiff(grayFull, prevProc, diff);
+                const sum2 = cv.sumElems(diff)[0];
+                procMags.push(sum2 / (smallW*smallH));
+            }
+            grayFull.copyTo(prevProc);
+
+            // draw anonymized frame to outCanvas for recording
+            const outImageData = new ImageData(new Uint8ClampedArray(outMat.data), outMat.cols, outMat.rows);
+            outCtx.putImageData(outImageData, 0, 0);
+
+            // cleanup per-frame mats
+            faces.delete();
+            outMat.delete();
+
+            processedFrames++;
+            // request next frame
+            if ('requestVideoFrameCallback' in origVideo) {
+                origVideo.requestVideoFrameCallback(handleFrame);
+            } else {
+                // fallback: use setTimeout with typical 15fps
+                setTimeout(() => handleFrame(), 66);
+            }
+        };
+
+        function finalize() {
+            // stop recorder after a short delay to flush last frames
+            setTimeout(() => {
+                try { recorder.stop(); } catch (e) { console.warn('recorder stop', e); }
+            }, 200);
+
+            // compute final motion score using Pearson on per-frame magnitudes
+            let score = 0;
+            if (origMags.length > 1 && procMags.length > 1) {
+                // align lengths
+                const n = Math.min(origMags.length, procMags.length);
+                const a = origMags.slice(0,n);
+                const b = procMags.slice(0,n);
+                score = computePearson(a,b);
+            }
+            const finalScore = Math.max(0, score);
+            statusText.innerText = 'Motion Preservation Score:';
+            scoreText.innerText = finalScore.toFixed(3);
+            if (finalScore >= 0.85) {
+                scoreText.style.color = '#2e7d32'; scoreText.innerText += ' 🏆 (PROMISING)';
+            } else if (finalScore >= 0.70) {
+                scoreText.style.color = '#ed6c02'; scoreText.innerText += ' (GOOD)';
+            } else {
+                scoreText.style.color = '#d32f2f'; scoreText.innerText += ' (NEEDS TUNING)';
+            }
+
+            // free mats
+            try {
+                src.delete(); rgba.delete(); grayFull.delete(); smallGray.delete(); prevOrig.delete(); prevProc.delete(); diff.delete();
+            } catch (e) { console.warn('mat delete error', e); }
+        }
+
+        // Start processing by playing and requesting frames
+        await origVideo.play();
+        if ('requestVideoFrameCallback' in origVideo) {
+            origVideo.requestVideoFrameCallback(handleFrame);
+        } else {
+            // fallback: setInterval capture while playing
+            const fallbackInterval = setInterval(() => {
+                if (processedFrames >= maxFrames || origVideo.ended) { clearInterval(fallbackInterval); finalize(); return; }
+                ctx.drawImage(origVideo,0,0,width,height);
+                handleFrame();
+            }, 1000/15);
+        }
+
+    } catch (err) {
+        console.error(err);
+        alert('Error during processing: ' + err.message);
+        document.getElementById('statusText').innerText = 'Error: ' + (err.message || err);
     }
-}
+});
 </script>
 </body>
 </html>
