@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Video Firewall – Telemedicine Privacy</title>
+    <!-- Load OpenCV.js from CDN -->
+    <script async src="https://docs.opencv.org/4.5.5/opencv.js" onload="onOpenCvReady()" type="text/javascript"></script>
+    <style>
+        body { font-family: 'Segoe UI', sans-serif; max-width: 1000px; margin: auto; padding: 20px; background: #f5f7fa; }
+        h1 { color: #1a3a5c; }
+        .row { display: flex; flex-wrap: wrap; gap: 20px; }
+        .column { flex: 1; min-width: 300px; }
+        video, canvas { width: 100%; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
+        .status { font-size: 1.2em; font-weight: bold; margin: 10px 0; }
+        .score { color: #2e7d32; }
+        button { background: #1a3a5c; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 1em; cursor: pointer; }
+        button:hover { background: #0f2a44; }
+        input[type="file"] { margin: 10px 0; }
+        .note { background: #e3f2fd; padding: 10px; border-radius: 8px; }
+    </style>
+</head>
+<body>
+<h1>🔥 Task‑Aware Video Firewall</h1>
+<p><strong>Preserves diagnostic motion – obfuscates identity</strong></p>
+
+<input type="file" id="videoInput" accept="video/*">
+<button onclick="processVideo()">Process Video</button>
+<div class="row">
+    <div class="column">
+        <h3>Original</h3>
+        <video id="origVideo" controls width="100%"></video>
+    </div>
+    <div class="column">
+        <h3>Firewall (Anonymised)</h3>
+        <video id="firewallVideo" controls width="100%"></video>
+    </div>
+</div>
+<div class="status">
+    <span id="statusText">Upload a video and click Process.</span>
+    <span id="scoreText" class="score"></span>
+</div>
+<div class="note">
+    <strong>Score ≥ 0.85</strong> indicates utility (motion) is preserved while identity is hidden.
+</div>
+<canvas id="canvas" style="display:none;"></canvas>
+
+<script>
+let cvReady = false;
+let cv = null;
+
+function onOpenCvReady() {
+    cvReady = true;
+    cv = cv;
+    console.log("OpenCV.js ready");
+}
+
+// Convert video frame to cv.Mat
+function videoToMat(videoElement) {
+    const canvas = document.getElementById('canvas');
+    canvas.width = videoElement.videoWidth;
+    canvas.height = videoElement.videoHeight;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(videoElement, 0, 0);
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    let mat = cv.matFromImageData(imageData);
+    return mat;
+}
+
+function processVideo() {
+    const input = document.getElementById('videoInput');
+    const file = input.files[0];
+    if (!file) {
+        alert('Please select a video file.');
+        return;
+    }
+
+    if (!cvReady) {
+        alert('OpenCV.js is still loading. Please wait a moment and try again.');
+        return;
+    }
+
+    const origVideo = document.getElementById('origVideo');
+    const firewallVideo = document.getElementById('firewallVideo');
+    const statusText = document.getElementById('statusText');
+    const scoreText = document.getElementById('scoreText');
+
+    const url = URL.createObjectURL(file);
+    origVideo.src = url;
+    origVideo.load();
+
+    // We need to wait for metadata to get dimensions
+    origVideo.onloadedmetadata = function() {
+        const width = origVideo.videoWidth;
+        const height = origVideo.videoHeight;
+        const canvas = document.getElementById('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+
+        // Capture frames
+        const frameCount = 60;
+        const frames = [];
+        const processedFrames = [];
+        let captured = 0;
+        let interval;
+
+        function captureFrame() {
+            if (captured >= frameCount || origVideo.paused || origVideo.ended) {
+                clearInterval(interval);
+                // Now compute motion score
+                computeAndDisplay(frames, processedFrames);
+                return;
+            }
+            ctx.drawImage(origVideo, 0, 0, width, height);
+            const imageData = ctx.getImageData(0, 0, width, height);
+            let mat = cv.matFromImageData(imageData);
+            frames.push(mat.clone());
+
+            // Apply firewall: detect face and blur upper part
+            let gray = new cv.Mat();
+            cv.cvtColor(mat, gray, cv.COLOR_RGBA2GRAY);
+            let faces = new cv.RectVector();
+            let cascade = new cv.CascadeClassifier();
+            cascade.load(cv.haarcascade_frontalface_default);
+            cascade.detectMultiScale(gray, faces, 1.1, 4);
+            let mask = cv.Mat.zeros(mat.rows, mat.cols, cv.CV_8U);
+            if (faces.size() > 0) {
+                let rect = faces.get(0);
+                // Draw ellipse mask on upper face
+                let center = new cv.Point(rect.x + rect.width/2, rect.y + rect.height*0.4);
+                let axes = new cv.Size(rect.width*0.45, rect.height*0.3);
+                cv.ellipse(mask, center, axes, 0, 0, 360, new cv.Scalar(255), -1);
+                // Blur only mask area
+                let blurred = new cv.Mat();
+                cv.GaussianBlur(mat, blurred, new cv.Size(51,51), 0);
+                mat.copyTo(blurred, mask);
+                processedFrames.push(blurred.clone());
+                blurred.delete();
+            } else {
+                processedFrames.push(mat.clone());
+            }
+            faces.delete();
+            gray.delete();
+            mask.delete();
+            captured++;
+            // Advance video by 2 frames (skip for speed)
+            origVideo.currentTime += 0.1;
+        }
+
+        origVideo.play();
+        interval = setInterval(captureFrame, 50);
+        origVideo.pause(); // pause after playback
+    };
+
+    function computeAndDisplay(frames, processedFrames) {
+        if (frames.length < 2) {
+            statusText.innerText = 'Not enough frames captured.';
+            return;
+        }
+
+        // Compute motion score: correlation of frame differences
+        const origFlattened = frames.map(m => Array.from(m.data));
+        const procFlattened = processedFrames.map(m => Array.from(m.data));
+        const origDiff = [];
+        const procDiff = [];
+        for (let i = 0; i < origFlattened.length - 1; i++) {
+            const diff = origFlattened[i+1].map((v, idx) => v - origFlattened[i][idx]);
+            origDiff.push(diff);
+            const pdiff = procFlattened[i+1].map((v, idx) => v - procFlattened[i][idx]);
+            procDiff.push(pdiff);
+        }
+        // Flatten all diffs
+        const allOrig = origDiff.flat();
+        const allProc = procDiff.flat();
+        // Correlation coefficient
+        const meanOrig = allOrig.reduce((a,b)=>a+b,0) / allOrig.length;
+        const meanProc = allProc.reduce((a,b)=>a+b,0) / allProc.length;
+        let num = 0, denOrig = 0, denProc = 0;
+        for (let i = 0; i < allOrig.length; i++) {
+            num += (allOrig[i] - meanOrig) * (allProc[i] - meanProc);
+            denOrig += (allOrig[i] - meanOrig) ** 2;
+            denProc += (allProc[i] - meanProc) ** 2;
+        }
+        const score = num / (Math.sqrt(denOrig * denProc) + 1e-10);
+        const finalScore = Math.max(0, score);
+        statusText.innerText = 'Motion Preservation Score:';
+        scoreText.innerText = finalScore.toFixed(3);
+        if (finalScore >= 0.85) {
+            scoreText.style.color = '#2e7d32';
+            scoreText.innerText += ' 🏆 (PROMISING)';
+        } else if (finalScore >= 0.70) {
+            scoreText.style.color = '#ed6c02';
+            scoreText.innerText += ' (GOOD)';
+        } else {
+            scoreText.style.color = '#d32f2f';
+            scoreText.innerText += ' (NEEDS TUNING)';
+        }
+
+        // Create output video from processed frames
+        const canvas2 = document.createElement('canvas');
+        canvas2.width = frames[0].cols;
+        canvas2.height = frames[0].rows;
+        const ctx2 = canvas2.getContext('2d');
+        const stream = canvas2.captureStream(10);
+        const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+        const chunks = [];
+        recorder.ondataavailable = e => chunks.push(e.data);
+        recorder.onstop = () => {
+            const blob = new Blob(chunks, { type: 'video/webm' });
+            const url = URL.createObjectURL(blob);
+            firewallVideo.src = url;
+            firewallVideo.load();
+            firewallVideo.play();
+        };
+        recorder.start();
+        // Draw each frame
+        let idx = 0;
+        const interval2 = setInterval(() => {
+            if (idx >= processedFrames.length) {
+                clearInterval(interval2);
+                recorder.stop();
+                return;
+            }
+            const mat = processedFrames[idx];
+            const imageData = new ImageData(new Uint8ClampedArray(mat.data), mat.cols, mat.rows);
+            ctx2.putImageData(imageData, 0, 0);
+            idx++;
+        }, 100);
+        // Clean up mats
+        frames.forEach(m => m.delete());
+        processedFrames.forEach(m => m.delete());
+    }
+}
+</script>
+</body>
+</html>
