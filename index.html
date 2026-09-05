@@ -1,294 +1,442 @@
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <meta charset="utf-8">
-    <title>Video Firewall – Telemedicine Privacy</title>
-    <!-- Load OpenCV.js from CDN -->
-    <script async src="https://docs.opencv.org/4.5.5/opencv.js" onload="onOpenCvReady()" type="text/javascript"></script>
-    <style>
-        body { font-family: 'Segoe UI', sans-serif; max-width: 1000px; margin: auto; padding: 20px; background: #f5f7fa; }
-        h1 { color: #1a3a5c; }
-        .row { display: flex; flex-wrap: wrap; gap: 20px; }
-        .column { flex: 1; min-width: 300px; }
-        video, canvas { width: 100%; border-radius: 8px; box-shadow: 0 4px 8px rgba(0,0,0,0.1); }
-        .status { font-size: 1.0em; font-weight: bold; margin: 10px 0; }
-        .score { color: #2e7d32; font-weight: bold; margin-left: 8px; }
-        button { background: #1a3a5c; color: white; border: none; padding: 12px 24px; border-radius: 8px; font-size: 1em; cursor: pointer; }
-        button:hover { background: #0f2a44; }
-        input[type="file"] { margin: 10px 0; }
-        .note { background: #e3f2fd; padding: 10px; border-radius: 8px; }
-    </style>
+  <meta charset="utf-8" />
+  <title>Video Firewall – Telemedicine Privacy</title>
+
+  <!-- OpenCV.js -->
+  <script async src="https://docs.opencv.org/4.5.5/opencv.js" type="text/javascript"></script>
+
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <style>
+    body { font-family: 'Segoe UI', sans-serif; max-width:1000px; margin:auto; padding:20px; background:#f5f7fa; }
+    h1 { color:#1a3a5c; margin-top:0; }
+    .row { display:flex; flex-wrap:wrap; gap:20px; }
+    .column { flex:1; min-width:300px; }
+    video, canvas { width:100%; border-radius:8px; box-shadow:0 4px 8px rgba(0,0,0,.1); background:#000; }
+    .controls { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin:12px 0; }
+    .status { font-size:1em; font-weight:bold; margin:10px 0; display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .score { font-weight:bold; margin-left:8px; }
+    button { background:#1a3a5c; color:#fff; border:none; padding:12px 18px; border-radius:8px; font-size:1em; cursor:pointer; }
+    button[disabled] { opacity:.6; cursor:not-allowed; }
+    input[type="file"] { display:none; }
+    .file-label { background:#e0f0ff; padding:8px 12px; border-radius:8px; cursor:pointer; }
+    .note { background:#e3f2fd; padding:10px; border-radius:8px; }
+    .progress { width:220px; height:12px; background:#e0e0e0; border-radius:6px; overflow:hidden; }
+    .progress > i { display:block; height:100%; background:#2e7d32; width:0%; transition:width 120ms linear; }
+    .sr-only { position:absolute; left:-10000px; top:auto; width:1px; height:1px; overflow:hidden; }
+  </style>
 </head>
 <body>
-<h1>🔥 Task‑Aware Video Firewall</h1>
-<p><strong>Preserves diagnostic motion – obfuscates identity</strong></p>
+  <h1>🔥 Task‑Aware Video Firewall</h1>
+  <p><strong>Preserves diagnostic motion – obfuscates identity</strong></p>
 
-<input type="file" id="videoInput" accept="video/*">
-<button id="processBtn">Process Video</button>
-<div class="row">
+  <div class="controls" role="group" aria-label="Controls">
+    <label class="file-label" for="videoInput">Choose video</label>
+    <input id="videoInput" type="file" accept="video/*" aria-label="Choose video file" />
+    <button id="processBtn">Process Video</button>
+    <button id="stopBtn" disabled>Stop</button>
+    <div class="progress" aria-hidden="true"><i id="progressBar"></i></div>
+  </div>
+
+  <div class="row">
     <div class="column">
-        <h3>Original</h3>
-        <video id="origVideo" controls width="100%"></video>
+      <h3>Original</h3>
+      <video id="origVideo" controls playsinline></video>
     </div>
     <div class="column">
-        <h3>Firewall (Anonymised)</h3>
-        <video id="firewallVideo" controls width="100%"></video>
+      <h3>Firewall (Anonymised)</h3>
+      <video id="firewallVideo" controls playsinline></video>
     </div>
-</div>
-<div class="status">
+  </div>
+
+  <div class="status" aria-live="polite">
     <span id="statusText">Upload a video and click Process.</span>
     <span id="scoreText" class="score"></span>
-</div>
-<div class="note">
+  </div>
+
+  <div class="note">
     <strong>Score ≥ 0.85</strong> indicates utility (motion) is preserved while identity is hidden.
-</div>
-<canvas id="canvas" style="display:none;"></canvas>
+  </div>
 
-<script>
-let cvReady = false;
-let cascade = null;
+  <!-- Hidden working canvas used by OpenCV.imshow -->
+  <canvas id="workCanvas" style="display:none;"></canvas>
 
-function onOpenCvReady() {
-    cvReady = true;
-    console.log('OpenCV.js ready');
-}
+  <script>
+  // -------------------------
+  // Configuration & globals
+  // -------------------------
+  let cvReady = false;
+  let cascade = null;
+  let isProcessing = false;
+  const maxFramesCap = 120;         // upper cap of processed frames
+  const sampleFPS = 15;             // target sampling FPS for processing
+  const smallW = 160;               // downsample width for motion metric
 
-// Load Haar cascade XML into OpenCV.js FS and create classifier
-async function loadFaceCascade() {
-    if (!cvReady) throw new Error('OpenCV.js not ready');
+  // Wait for OpenCV runtime to be ready
+  function onOpenCvReady() {
+    // prefer cv['onRuntimeInitialized'] when possible
+    if (cv && typeof cv['onRuntimeInitialized'] !== 'undefined') {
+      cv['onRuntimeInitialized'] = () => {
+        cvReady = true;
+        console.info('OpenCV runtime initialized');
+      };
+    } else {
+      // fallback if onRuntimeInitialized isn't available
+      cvReady = true;
+      console.info('OpenCV ready (fallback)');
+    }
+  }
+
+  // If the script is already loaded before this code runs, ensure we set up readiness
+  if (typeof cv !== 'undefined') onOpenCvReady();
+  // Also set a script onload guard if OpenCV loaded after this file
+  window.addEventListener('load', () => { if (typeof cv !== 'undefined') onOpenCvReady(); });
+
+  // -------------------------
+  // Helpers
+  // -------------------------
+  function safePearson(a, b) {
+    if (!a || !b || a.length !== b.length || a.length === 0) return 0;
+    const n = a.length;
+    let sumA = 0, sumB = 0;
+    for (let i = 0; i < n; i++) { sumA += a[i]; sumB += b[i]; }
+    const meanA = sumA / n, meanB = sumB / n;
+    let num = 0, denA = 0, denB = 0;
+    for (let i = 0; i < n; i++) {
+      const da = a[i] - meanA, db = b[i] - meanB;
+      num += da * db; denA += da * da; denB += db * db;
+    }
+    const denom = Math.sqrt(denA * denB);
+    if (denom < 1e-12) return 0;
+    return num / denom;
+  }
+
+  async function loadFaceCascade() {
+    if (!cvReady) throw new Error('OpenCV not ready');
     if (cascade) return cascade;
     const localUrl = './haarcascade_frontalface_default.xml';
     const fallbackUrl = 'https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml';
+
     let res;
     try {
-        // try local file first (recommended to commit this file into the repo)
-        res = await fetch(localUrl);
-        if (!res.ok) throw new Error('Local cascade not found');
+      res = await fetch(localUrl);
+      if (!res.ok) throw new Error('Local cascade not available');
     } catch (e) {
-        // fallback to remote
-        console.warn('Local cascade not available, fetching remote:', e);
-        res = await fetch(fallbackUrl);
-        if (!res.ok) throw new Error('Failed to fetch cascade XML');
+      // fallback remote
+      console.warn('Local cascade missing, fetching remote:', e);
+      res = await fetch(fallbackUrl);
+      if (!res.ok) throw new Error('Failed to fetch remote cascade');
     }
+
     const buf = await res.arrayBuffer();
     const data = new Uint8Array(buf);
-    // write to Emscripten FS
     try {
-        cv.FS_createDataFile('/', 'haarcascade_frontalface_default.xml', data, true, false, false);
+      // write to Emscripten FS. If file exists, FS_createDataFile may throw; catch and continue.
+      cv.FS_createDataFile('/', 'haarcascade_frontalface_default.xml', data, true, false, false);
     } catch (e) {
-        // might already exist
-        console.log('FS_createDataFile:', e.message || e);
+      console.debug('haarcascade write skipped or already present:', e && e.message ? e.message : e);
     }
     const cls = new cv.CascadeClassifier();
-    const loaded = cls.load('haarcascade_frontalface_default.xml');
-    if (!loaded) throw new Error('Failed to load Haar cascade into CascadeClassifier');
+    const ok = cls.load('haarcascade_frontalface_default.xml');
+    if (!ok) throw new Error('Failed to load Haar cascade into CascadeClassifier');
     cascade = cls;
     return cascade;
-}
+  }
 
-function computePearson(a, b) {
-    if (a.length !== b.length || a.length === 0) return 0;
-    const n = a.length;
-    let sumA=0, sumB=0;
-    for (let i=0;i<n;i++){ sumA+=a[i]; sumB+=b[i]; }
-    const meanA = sumA/n; const meanB = sumB/n;
-    let num=0, denA=0, denB=0;
-    for (let i=0;i<n;i++){
-        const da = a[i]-meanA; const db = b[i]-meanB;
-        num += da*db; denA += da*da; denB += db*db;
+  function detectFaces(grayMat, classifier) {
+    const faces = new cv.RectVector();
+    // parameters tuned: scaleFactor, minNeighbors, flags, minSize
+    classifier.detectMultiScale(grayMat, faces, 1.1, 4, 0, new cv.Size(30, 30));
+    return faces;
+  }
+
+  // Choose best available mime for MediaRecorder
+  function chooseMime() {
+    const candidates = [
+      'video/webm;codecs=vp9,opus',
+      'video/webm;codecs=vp8,opus',
+      'video/webm',
+      'video/mp4'
+    ];
+    for (const c of candidates) {
+      if (MediaRecorder.isTypeSupported(c)) return c;
     }
-    return num / (Math.sqrt(denA*denB) + 1e-10);
-}
+    return '';
+  }
 
-document.getElementById('processBtn').addEventListener('click', async () => {
+  // -------------------------
+  // Main processing
+  // -------------------------
+  document.getElementById('processBtn').addEventListener('click', async () => {
     const input = document.getElementById('videoInput');
     const file = input.files[0];
     const statusText = document.getElementById('statusText');
     const scoreText = document.getElementById('scoreText');
-    scoreText.innerText = '';
+    const progressBar = document.getElementById('progressBar');
+    scoreText.textContent = '';
+    progressBar.style.width = '0%';
+
     if (!file) { alert('Please select a video file.'); return; }
-    if (!cvReady) { alert('OpenCV.js is still loading. Please wait.'); return; }
+    if (!cvReady) { alert('OpenCV.js is still loading. Please wait a moment.'); return; }
+    if (isProcessing) { alert('Processing already in progress.'); return; }
+
+    isProcessing = true;
+    document.getElementById('processBtn').disabled = true;
+    document.getElementById('stopBtn').disabled = false;
+    document.querySelector('.file-label').style.pointerEvents = 'none';
 
     const origVideo = document.getElementById('origVideo');
     const firewallVideo = document.getElementById('firewallVideo');
-    const url = URL.createObjectURL(file);
-    origVideo.src = url;
+
+    // Revoke previous objectURLs if any
+    if (origVideo.src && origVideo.src.startsWith('blob:')) URL.revokeObjectURL(origVideo.src);
+    if (firewallVideo.src && firewallVideo.src.startsWith('blob:')) URL.revokeObjectURL(firewallVideo.src);
+
+    const fileURL = URL.createObjectURL(file);
+    origVideo.src = fileURL;
     origVideo.load();
 
-    statusText.innerText = 'Preparing...';
+    statusText.textContent = 'Preparing...';
 
     try {
-        await new Promise((resolve) => { origVideo.onloadedmetadata = resolve; });
-        const width = origVideo.videoWidth;
-        const height = origVideo.videoHeight;
-        const canvas = document.getElementById('canvas');
-        canvas.width = width; canvas.height = height;
-        const ctx = canvas.getContext('2d');
+      // wait for metadata
+      await new Promise((resolve, reject) => {
+        origVideo.onloadedmetadata = () => { resolve(); };
+        origVideo.onerror = () => reject(new Error('Failed to load video metadata'));
+      });
 
-        // Output canvas for recording
-        const outCanvas = document.createElement('canvas');
-        outCanvas.width = width; outCanvas.height = height;
-        const outCtx = outCanvas.getContext('2d');
+      const width = origVideo.videoWidth || 640;
+      const height = origVideo.videoHeight || 480;
 
-        // prepare recorder
-        const stream = outCanvas.captureStream(15);
-        let mimeType = 'video/webm';
-        if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = '';
-        const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-        const chunks = [];
-        recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
-        recorder.onstop = () => {
-            const blob = new Blob(chunks, { type: 'video/webm' });
-            const outUrl = URL.createObjectURL(blob);
-            firewallVideo.src = outUrl; firewallVideo.load(); firewallVideo.play();
-        };
+      // compute how many frames to process (based on duration & sampleFPS)
+      const duration = Math.max(0.1, origVideo.duration || 1.0);
+      const estimatedFrames = Math.min(maxFramesCap, Math.round(duration * sampleFPS));
+      const maxFrames = Math.max(1, estimatedFrames);
 
-        // Load cascade once
-        await loadFaceCascade();
+      // Setup canvases
+      const workCanvas = document.getElementById('workCanvas');
+      workCanvas.width = width; workCanvas.height = height;
 
-        // Mats allocation (reused)
-        const src = new cv.Mat(height, width, cv.CV_8UC4);
-        const rgba = new cv.Mat();
-        const grayFull = new cv.Mat();
-        const smallGray = new cv.Mat();
-        const prevOrig = new cv.Mat();
-        const prevProc = new cv.Mat();
-        const diff = new cv.Mat();
+      const outCanvas = document.createElement('canvas');
+      outCanvas.width = width; outCanvas.height = height;
+      const outStream = outCanvas.captureStream(sampleFPS);
+      const mime = chooseMime();
+      const recorder = new MediaRecorder(outStream, mime ? { mimeType: mime } : undefined);
+      const chunks = [];
+      recorder.ondataavailable = e => { if (e.data && e.data.size) chunks.push(e.data); };
 
-        const smallW = 160;
-        const smallH = Math.max(1, Math.round((smallW * height) / width));
+      let recorderStopped = false;
+      recorder.onstop = () => {
+        recorderStopped = true;
+        const blob = new Blob(chunks, { type: mime || 'video/webm' });
+        const outUrl = URL.createObjectURL(blob);
+        firewallVideo.src = outUrl;
+        firewallVideo.load();
+        firewallVideo.play().catch(()=>{ /* ignore autoplay block */ });
+      };
 
-        const origMags = [];
-        const procMags = [];
-        const maxFrames = 60;
-        let processedFrames = 0;
+      // ensure cascade loaded
+      await loadFaceCascade();
 
-        statusText.innerText = 'Processing frames...';
-        recorder.start();
+      // Preallocate Mats (single channel and RGBA where needed)
+      const src = new cv.Mat(height, width, cv.CV_8UC4);
+      const grayFull = new cv.Mat();
+      const smallMat = new cv.Mat();
+      const prevOrig = new cv.Mat();
+      const prevProc = new cv.Mat();
+      const diff = new cv.Mat();
 
-        // Frame processing callback
-        const handleFrame = (now, metadata) => {
-            if (processedFrames >= maxFrames || origVideo.ended) {
-                finalize();
-                return;
-            }
-            // draw current frame to temp canvas
-            ctx.drawImage(origVideo, 0, 0, width, height);
-            const imageData = ctx.getImageData(0,0,width,height);
-            // copy to src mat
-            src.data.set(imageData.data);
+      // We'll reuse outMat, blurredMat, maskMat allocated once per processing session
+      const outMat = new cv.Mat();
+      const blurred = new cv.Mat();
+      let maskMat = new cv.Mat();
 
-            // Detect faces on grayscale full
-            cv.cvtColor(src, grayFull, cv.COLOR_RGBA2GRAY);
-            const faces = new cv.RectVector();
-            cascade.detectMultiScale(grayFull, faces, 1.1, 4);
+      const origMags = [];
+      const procMags = [];
+      let processedFrames = 0;
+      statusText.textContent = 'Processing frames...';
+      recorder.start();
 
-            // Create anonymized frame in a Mat (we will blur region)
-            let outMat = new cv.Mat();
-            src.copyTo(outMat);
+      // Helper to finalize and clean up
+      let stopRequested = false;
+      function finalize(success=true, errMsg) {
+        stopRequested = true;
+        try {
+          if (!recorderStopped) {
+            try { recorder.stop(); } catch (e) { console.warn('recorder stop error', e); }
+          }
+        } catch (e) { console.warn(e); }
 
-            if (faces.size() > 0) {
-                const r = faces.get(0);
-                const center = new cv.Point(r.x + r.width/2, r.y + Math.round(r.height*0.4));
-                const axes = new cv.Size(Math.round(r.width*0.5), Math.round(r.height*0.35));
-                const mask = new cv.Mat.zeros(outMat.rows, outMat.cols, cv.CV_8U);
-                cv.ellipse(mask, center, axes, 0, 0, 360, new cv.Scalar(255), -1);
-                const blurred = new cv.Mat();
-                cv.GaussianBlur(outMat, blurred, new cv.Size(51,51), 0);
-                // copy only mask area from blurred into outMat
-                blurred.copyTo(outMat, mask);
-                mask.delete(); blurred.delete();
-            }
-
-            // For motion metric: compute on downsampled grayscale
-            cv.cvtColor(src, smallGray, cv.COLOR_RGBA2GRAY);
-            cv.resize(smallGray, smallGray, new cv.Size(smallW, smallH));
-            if (!prevOrig.empty()) {
-                cv.absdiff(smallGray, prevOrig, diff);
-                const sum = cv.sumElems(diff)[0];
-                origMags.push(sum / (smallW*smallH));
-            }
-            smallGray.copyTo(prevOrig);
-
-            // For processed frame motion
-            cv.cvtColor(outMat, grayFull, cv.COLOR_RGBA2GRAY);
-            cv.resize(grayFull, grayFull, new cv.Size(smallW, smallH));
-            if (!prevProc.empty()) {
-                cv.absdiff(grayFull, prevProc, diff);
-                const sum2 = cv.sumElems(diff)[0];
-                procMags.push(sum2 / (smallW*smallH));
-            }
-            grayFull.copyTo(prevProc);
-
-            // draw anonymized frame to outCanvas for recording
-            const outImageData = new ImageData(new Uint8ClampedArray(outMat.data), outMat.cols, outMat.rows);
-            outCtx.putImageData(outImageData, 0, 0);
-
-            // cleanup per-frame mats
-            faces.delete();
-            outMat.delete();
-
-            processedFrames++;
-            // request next frame
-            if ('requestVideoFrameCallback' in origVideo) {
-                origVideo.requestVideoFrameCallback(handleFrame);
-            } else {
-                // fallback: use setTimeout with typical 15fps
-                setTimeout(() => handleFrame(), 66);
-            }
-        };
-
-        function finalize() {
-            // stop recorder after a short delay to flush last frames
-            setTimeout(() => {
-                try { recorder.stop(); } catch (e) { console.warn('recorder stop', e); }
-            }, 200);
-
-            // compute final motion score using Pearson on per-frame magnitudes
-            let score = 0;
-            if (origMags.length > 1 && procMags.length > 1) {
-                // align lengths
-                const n = Math.min(origMags.length, procMags.length);
-                const a = origMags.slice(0,n);
-                const b = procMags.slice(0,n);
-                score = computePearson(a,b);
-            }
-            const finalScore = Math.max(0, score);
-            statusText.innerText = 'Motion Preservation Score:';
-            scoreText.innerText = finalScore.toFixed(3);
-            if (finalScore >= 0.85) {
-                scoreText.style.color = '#2e7d32'; scoreText.innerText += ' 🏆 (PROMISING)';
-            } else if (finalScore >= 0.70) {
-                scoreText.style.color = '#ed6c02'; scoreText.innerText += ' (GOOD)';
-            } else {
-                scoreText.style.color = '#d32f2f'; scoreText.innerText += ' (NEEDS TUNING)';
-            }
-
-            // free mats
-            try {
-                src.delete(); rgba.delete(); grayFull.delete(); smallGray.delete(); prevOrig.delete(); prevProc.delete(); diff.delete();
-            } catch (e) { console.warn('mat delete error', e); }
+        // compute score
+        let score = 0;
+        if (origMags.length > 1 && procMags.length > 1) {
+          const n = Math.min(origMags.length, procMags.length);
+          score = safePearson(origMags.slice(0, n), procMags.slice(0, n));
         }
-
-        // Start processing by playing and requesting frames
-        await origVideo.play();
-        if ('requestVideoFrameCallback' in origVideo) {
-            origVideo.requestVideoFrameCallback(handleFrame);
+        const finalScore = Math.max(0, Math.min(1, score || 0));
+        statusText.textContent = 'Motion Preservation Score:';
+        scoreText.textContent = finalScore.toFixed(3);
+        if (finalScore >= 0.85) {
+          scoreText.style.color = '#2e7d32'; scoreText.textContent += ' 🏆 (PROMISING)';
+        } else if (finalScore >= 0.70) {
+          scoreText.style.color = '#ed6c02'; scoreText.textContent += ' (GOOD)';
         } else {
-            // fallback: setInterval capture while playing
-            const fallbackInterval = setInterval(() => {
-                if (processedFrames >= maxFrames || origVideo.ended) { clearInterval(fallbackInterval); finalize(); return; }
-                ctx.drawImage(origVideo,0,0,width,height);
-                handleFrame();
-            }, 1000/15);
+          scoreText.style.color = '#d32f2f'; scoreText.textContent += ' (NEEDS TUNING)';
         }
+
+        // cleanup mats
+        try {
+          src.delete(); grayFull.delete(); smallMat.delete(); prevOrig.delete(); prevProc.delete(); diff.delete();
+          outMat.delete(); blurred.delete(); maskMat.delete();
+        } catch (e) { console.warn('mat deletion error', e); }
+
+        // restore UI
+        isProcessing = false;
+        document.getElementById('processBtn').disabled = false;
+        document.getElementById('stopBtn').disabled = true;
+        document.querySelector('.file-label').style.pointerEvents = 'auto';
+        progressBar.style.width = '100%';
+
+        if (!success && errMsg) {
+          statusText.textContent = 'Error: ' + errMsg;
+        }
+      }
+
+      // Frame handler (called by requestVideoFrameCallback or fallback)
+      const ctx = workCanvas.getContext('2d');
+      const outCtx = outCanvas.getContext('2d');
+
+      // Start playing video for frame consumption
+      await origVideo.play();
+
+      // We'll compute kernel size for blur relative to face; fallback value if no faces: 51
+      const handleFrame = (now, metadata) => {
+        if (stopRequested) return;
+        try {
+          if (processedFrames >= maxFrames || origVideo.ended) {
+            finalize();
+            return;
+          }
+
+          // draw current frame
+          ctx.drawImage(origVideo, 0, 0, width, height);
+          const imageData = ctx.getImageData(0, 0, width, height);
+          // copy to src mat (expecting RGBA order)
+          src.data.set(imageData.data);
+
+          // convert to gray and detect faces
+          cv.cvtColor(src, grayFull, cv.COLOR_RGBA2GRAY);
+          const faces = detectFaces(grayFull, cascade);
+
+          // prepare output mat copy
+          src.copyTo(outMat);
+
+          // ensure maskMat and blurred have correct sizes
+          if (maskMat.rows !== outMat.rows || maskMat.cols !== outMat.cols) {
+            try { maskMat.delete(); } catch(e) {}
+            maskMat = new cv.Mat.zeros(outMat.rows, outMat.cols, cv.CV_8U);
+          } else {
+            maskMat.setTo(new cv.Scalar(0));
+          }
+
+          // If faces found, blur each face region into mask; support multiple faces
+          const facesCount = faces.size();
+          let blurKernel = 51;
+          for (let i = 0; i < facesCount; i++) {
+            const r = faces.get(i);
+            const center = new cv.Point(r.x + r.width/2, r.y + Math.round(r.height * 0.45));
+            const axisX = Math.max(1, Math.round(r.width * 0.55));
+            const axisY = Math.max(1, Math.round(r.height * 0.45));
+            const axes = new cv.Size(axisX, axisY);
+            cv.ellipse(maskMat, center, axes, 0, 0, 360, new cv.Scalar(255), -1);
+            // adjust blur kernel based on face size (make it odd)
+            const k = Math.max(15, Math.floor(Math.min(r.width, r.height) * 0.4) | 1);
+            blurKernel = Math.max(blurKernel, k);
+          }
+
+          // apply Gaussian blur once (full frame) and copy masked area
+          const ksize = new cv.Size(blurKernel, blurKernel);
+          cv.GaussianBlur(outMat, blurred, ksize, 0);
+          blurred.copyTo(outMat, maskMat);
+
+          // Motion metric: compute on downsampled grayscale
+          // smallMat will hold downsampled grayscale
+          cv.cvtColor(src, grayFull, cv.COLOR_RGBA2GRAY);
+          const smallH = Math.max(1, Math.round((smallW * height) / width));
+          cv.resize(grayFull, smallMat, new cv.Size(smallW, smallH), 0, 0, cv.INTER_AREA);
+          if (!prevOrig.empty()) {
+            cv.absdiff(smallMat, prevOrig, diff);
+            const sum = cv.sumElems(diff)[0];
+            origMags.push(sum / (smallW * smallH));
+          }
+          smallMat.copyTo(prevOrig);
+
+          // processed frame motion
+          cv.cvtColor(outMat, grayFull, cv.COLOR_RGBA2GRAY);
+          cv.resize(grayFull, smallMat, new cv.Size(smallW, smallH), 0, 0, cv.INTER_AREA);
+          if (!prevProc.empty()) {
+            cv.absdiff(smallMat, prevProc, diff);
+            const sum2 = cv.sumElems(diff)[0];
+            procMags.push(sum2 / (smallW * smallH));
+          }
+          smallMat.copyTo(prevProc);
+
+          // Render anonymized frame to outCanvas using OpenCV's imshow (faster)
+          cv.imshow(outCanvas, outMat);
+
+          // update recorder will pick up outCanvas content via captureStream
+          processedFrames++;
+          const pct = Math.round((processedFrames / maxFrames) * 100);
+          progressBar.style.width = pct + '%';
+
+          // cleanup per-iteration resources
+          faces.delete();
+
+          // schedule next frame
+          if ('requestVideoFrameCallback' in origVideo) {
+            origVideo.requestVideoFrameCallback(handleFrame);
+          } else {
+            // fallback (align to sampleFPS)
+            setTimeout(() => {
+              handleFrame();
+            }, 1000 / sampleFPS);
+          }
+        } catch (err) {
+          console.error('Frame processing error', err);
+          finalize(false, err && err.message ? err.message : String(err));
+        }
+      };
+
+      // Setup stop button
+      const stopBtn = document.getElementById('stopBtn');
+      const stopHandler = () => {
+        stopBtn.disabled = true;
+        finalize();
+      };
+      stopBtn.addEventListener('click', stopHandler, { once: true });
+
+      // Start the frame loop
+      if ('requestVideoFrameCallback' in origVideo) {
+        origVideo.requestVideoFrameCallback(handleFrame);
+      } else {
+        handleFrame();
+      }
 
     } catch (err) {
-        console.error(err);
-        alert('Error during processing: ' + err.message);
-        document.getElementById('statusText').innerText = 'Error: ' + (err.message || err);
+      console.error(err);
+      document.getElementById('statusText').innerText = 'Error: ' + (err.message || err);
+      document.getElementById('processBtn').disabled = false;
+      document.getElementById('stopBtn').disabled = true;
+      document.querySelector('.file-label').style.pointerEvents = 'auto';
+      isProcessing = false;
     }
-});
-</script>
+  });
+
+  // Small helper: clicking the visible label opens file chooser
+  document.querySelector('.file-label').addEventListener('click', () => {
+    document.getElementById('videoInput').click();
+  });
+  </script>
 </body>
 </html>
