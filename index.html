@@ -57,9 +57,19 @@ function onOpenCvReady() {
 async function loadFaceCascade() {
     if (!cvReady) throw new Error('OpenCV.js not ready');
     if (cascade) return cascade;
-    const url = 'https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml';
-    const res = await fetch(url);
-    if (!res.ok) throw new Error('Failed to fetch cascade XML');
+    const localUrl = './haarcascade_frontalface_default.xml';
+    const fallbackUrl = 'https://raw.githubusercontent.com/opencv/opencv/master/data/haarcascades/haarcascade_frontalface_default.xml';
+    let res;
+    try {
+        // try local file first (recommended to commit this file into the repo)
+        res = await fetch(localUrl);
+        if (!res.ok) throw new Error('Local cascade not found');
+    } catch (e) {
+        // fallback to remote
+        console.warn('Local cascade not available, fetching remote:', e);
+        res = await fetch(fallbackUrl);
+        if (!res.ok) throw new Error('Failed to fetch cascade XML');
+    }
     const buf = await res.arrayBuffer();
     const data = new Uint8Array(buf);
     // write to Emscripten FS
