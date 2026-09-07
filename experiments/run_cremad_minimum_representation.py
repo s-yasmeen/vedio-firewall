@@ -1,38 +1,58 @@
 """Evaluate a non-image TAPF-MIN motion representation on CREMA-D.
 
-Measures actor-disjoint emotion utility and identity inference directly from the released
-motion representation. This is the appropriate privacy test for a non-image release: the
-attacker is retrained on exactly what the receiver would obtain.
-
-Do not describe a representation as privacy-preserving unless the measured identity attack
-and utility bounds satisfy a predeclared policy.
+The released object is a compact motion feature vector, not face pixels. Privacy is tested
+with an adaptive attacker trained directly on that released representation. Utility is
+estimated with actor-disjoint cross-validation. No anonymity or clinical-validity claim is
+made; a representation is eligible only after predeclared privacy/utility criteria are met.
 """
 from pathlib import Path
 import argparse, json, re
 import numpy as np
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import f1_score, roc_auc_score
+from sklearn.model_selection import GroupKFold
 from sklearn.pipeline import make_pipeline
 from sklearn.preprocessing import StandardScaler
 from tapf.minimum_representation import read_motion_clip
 
-EMOTIONS=["ANG","DIS","FEA","HAP","NEU","SAD"]
 NAME_RE=re.compile(r"^(\d{4})_DFA_(ANG|DIS|FEA|HAP|NEU|SAD)_XX\.flv$",re.I)
 MIN_REAL_VIDEO_BYTES=1000
 
 
-def bootstrap_metric(y, pred_or_score, fn, seed=42, n=500):
-    rng=np.random.default_rng(seed); vals=[]; y=np.asarray(y); p=np.asarray(pred_or_score)
-    point=float(fn(y,p))
+def bootstrap_f1(y, pred, seed=42, n=500):
+    rng=np.random.default_rng(seed); y=np.asarray(y); pred=np.asarray(pred); vals=[]
+    point=float(f1_score(y,pred,average="macro",zero_division=0))
     for _ in range(n):
-        idx=rng.integers(0,len(y),len(y)); yy=y[idx]
-        try: vals.append(float(fn(yy,p[idx])))
+        idx=rng.integers(0,len(y),len(y))
+        vals.append(float(f1_score(y[idx],pred[idx],average="macro",zero_division=0)))
+    lo,hi=np.quantile(vals,[.025,.975])
+    return point,float(lo),float(hi)
+
+
+def macro_ovr_auc(y_true, proba, classes):
+    vals=[]
+    for j,c in enumerate(classes):
+        yy=(np.asarray(y_true)==c).astype(int)
+        if yy.min()==yy.max():
+            continue
+        vals.append(roc_auc_score(yy,proba[:,j]))
+    if not vals:
+        raise ValueError("No valid one-vs-rest class AUCs")
+    return float(np.mean(vals))
+
+
+def bootstrap_auc(y, proba, classes, seed=43, n=500):
+    rng=np.random.default_rng(seed); y=np.asarray(y); proba=np.asarray(proba); vals=[]
+    point=macro_ovr_auc(y,proba,classes)
+    for _ in range(n):
+        idx=rng.integers(0,len(y),len(y))
+        try: vals.append(macro_ovr_auc(y[idx],proba[idx],classes))
         except ValueError: pass
     lo,hi=np.quantile(vals,[.025,.975]) if vals else (point,point)
     return point,float(lo),float(hi)
 
 
-def run(root, train_actors=16, seed=42):
+def run(root, folds=5, seed=42):
     root=Path(root); files=[]
     for p in sorted(root.glob("*.flv")):
         m=NAME_RE.match(p.name)
@@ -41,41 +61,48 @@ def run(root, train_actors=16, seed=42):
     actors=sorted({a for _,a,_ in files})
     if len(files)<120 or len(actors)<8:
         raise RuntimeError(f"Need >=120 hydrated clips and >=8 actors; got {len(files)} clips/{len(actors)} actors")
-    train=set(actors[:min(train_actors,len(actors)-4)])
+    folds=max(2,min(int(folds),len(actors)))
+
     X=np.asarray([read_motion_clip(str(p)) for p,_,_ in files],dtype=np.float32)
     actor=np.asarray([a for _,a,_ in files]); emotion=np.asarray([e for _,_,e in files])
-    tr=np.asarray([i for i,a in enumerate(actor) if a in train]); te=np.asarray([i for i,a in enumerate(actor) if a not in train])
+    if not np.isfinite(X).all():
+        raise RuntimeError("Non-finite released features detected")
 
-    utility=make_pipeline(StandardScaler(),LogisticRegression(max_iter=3000,class_weight="balanced",random_state=seed))
-    utility.fit(X[tr],emotion[tr]); ep=utility.predict(X[te])
-    f1,f1_lo,f1_hi=bootstrap_metric(emotion[te],ep,lambda y,p:f1_score(y,p,average="macro",zero_division=0),seed+1)
+    # Utility: every test fold contains actors never used to train that fold's task model.
+    oof=np.empty(len(files),dtype=emotion.dtype)
+    splitter=GroupKFold(n_splits=folds)
+    fold_rows=[]
+    for fold,(tr,te) in enumerate(splitter.split(X,emotion,groups=actor),1):
+        clf=make_pipeline(StandardScaler(),LogisticRegression(max_iter=3000,class_weight="balanced",random_state=seed+fold))
+        clf.fit(X[tr],emotion[tr]); oof[te]=clf.predict(X[te])
+        fold_rows.append({"fold":fold,"train_actors":int(len(np.unique(actor[tr]))),"test_actors":int(len(np.unique(actor[te]))),
+                          "macro_f1":float(f1_score(emotion[te],oof[te],average="macro",zero_division=0))})
+    f1,f1_lo,f1_hi=bootstrap_f1(emotion,oof,seed+1)
 
-    # Closed-set identity inference from the released representation. Split clips per actor
-    # so the attacker is trained and tested on every test identity without reusing clips.
+    # Adaptive closed-set attacker: for each identity, train/test clips are disjoint.
     rng=np.random.default_rng(seed); atr=[]; ate=[]
     for a in actors:
-        ids=np.flatnonzero(actor==a); rng.shuffle(ids); cut=max(1,len(ids)//2)
-        atr.extend(ids[:cut]); ate.extend(ids[cut:])
-    atr=np.asarray(atr); ate=np.asarray(ate)
-    attacker=make_pipeline(StandardScaler(),LogisticRegression(max_iter=4000,class_weight="balanced",random_state=seed))
-    attacker.fit(X[atr],actor[atr])
-    proba=attacker.predict_proba(X[ate]); classes=attacker.classes_
-    # Macro one-vs-rest AUC; chance is 0.5. This attacks the actual released feature vector.
-    ybin=np.column_stack([(actor[ate]==c).astype(int) for c in classes])
-    auc,auc_lo,auc_hi=bootstrap_metric(ybin,proba,lambda y,s:roc_auc_score(y,s,average="macro",multi_class="ovr"),seed+2)
+        ids=np.flatnonzero(actor==a).copy(); rng.shuffle(ids)
+        if len(ids)<2:
+            continue
+        cut=max(1,min(len(ids)-1,len(ids)//2)); atr.extend(ids[:cut]); ate.extend(ids[cut:])
+    atr=np.asarray(atr,dtype=int); ate=np.asarray(ate,dtype=int)
+    attacker=make_pipeline(StandardScaler(),LogisticRegression(max_iter=5000,class_weight="balanced",random_state=seed))
+    attacker.fit(X[atr],actor[atr]); proba=attacker.predict_proba(X[ate]); classes=attacker.classes_
+    auc,auc_lo,auc_hi=bootstrap_auc(actor[ate],proba,classes,seed+2)
 
     result={
-      "representation":"motion-features-v1",
-      "clips":len(files),"actors":len(actors),
-      "emotion_macro_f1":f1,"emotion_macro_f1_ci95":[f1_lo,f1_hi],
+      "representation":"motion-features-v1","clips":len(files),"actors":len(actors),"feature_dim":int(X.shape[1]),
+      "utility_protocol":f"{folds}-fold actor-disjoint cross-validation",
+      "emotion_macro_f1":f1,"emotion_macro_f1_ci95":[f1_lo,f1_hi],"utility_folds":fold_rows,
+      "privacy_protocol":"adaptive closed-set identity attacker retrained on released non-image features; clip-disjoint per actor",
       "identity_inference_auc":auc,"identity_inference_auc_ci95":[auc_lo,auc_hi],
-      "protocol":"actor-disjoint emotion utility; attacker retrained on released non-image motion features; bootstrap 95% CI",
-      "interpretation":"Lower identity AUC is better; utility must be interpreted against a predeclared task threshold. No anonymity or clinical-validity claim."
+      "interpretation":"Identity AUC nearer 0.5 is better. Report privacy and utility together. Do not claim anonymity or clinical validity from this experiment alone."
     }
     Path("results").mkdir(exist_ok=True)
     Path("results/cremad_minimum_representation.json").write_text(json.dumps(result,indent=2))
     print(json.dumps(result,indent=2)); return result
 
 if __name__=="__main__":
-    ap=argparse.ArgumentParser(); ap.add_argument("root"); ap.add_argument("--train-actors",type=int,default=16)
-    a=ap.parse_args(); run(a.root,a.train_actors)
+    ap=argparse.ArgumentParser(); ap.add_argument("root"); ap.add_argument("--folds",type=int,default=5)
+    a=ap.parse_args(); run(a.root,a.folds)
