@@ -1,19 +1,20 @@
-name: TAPF-MIN v2.1 benchmark
+name: TAPF-MIN final validation
 
 on:
   push:
     branches: [tapf-min-v2-1]
     paths:
       - 'experiments/run_cremad_v21_adversarial.py'
+      - 'experiments/run_cremad_final_validation.py'
       - 'tapf/minimum_representation.py'
       - 'experiments/run_cremad_privacy_utility_spectrum.py'
       - '.github/workflows/cremad-minimum-representation.yml'
   workflow_dispatch:
 
 jobs:
-  v21:
+  final-validation:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 45
     env:
       PYTHONPATH: ${{ github.workspace }}
     steps:
@@ -42,10 +43,10 @@ jobs:
           count=$(find VideoFlash -maxdepth 1 -type f -name '*_DFA_*.flv' -size +1000c | wc -l)
           echo "Fetched real video clips: $count"
           test "$count" -ge 120
-      - name: Run TAPF-MIN v2.1 adversarial benchmark
-        run: python experiments/run_cremad_v21_adversarial.py /tmp/crema-d/VideoFlash
-      - name: Upload TAPF-MIN v2.1 metrics
+      - name: Run consolidated final validation
+        run: python experiments/run_cremad_final_validation.py /tmp/crema-d/VideoFlash
+      - name: Upload final validation metrics
         uses: actions/upload-artifact@v4
         with:
-          name: cremad-v21-adversarial
-          path: results/cremad_v21_adversarial.json
+          name: cremad-final-validation
+          path: results/cremad_final_validation.json
