@@ -27,6 +27,7 @@ jobs:
       - name: Fetch bounded CREMA-D DFA subset via Git LFS
         run: |
           git lfs install
+          rm -rf /tmp/crema-d
           cd /tmp
           GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 https://github.com/CheyneyComputerScience/CREMA-D.git crema-d
           cd crema-d
@@ -35,9 +36,12 @@ jobs:
             if [ -n "$INCLUDE" ]; then INCLUDE="$INCLUDE,"; fi
             INCLUDE="${INCLUDE}VideoFlash/${id}_DFA_*.flv"
           done
-          git lfs pull --include="$INCLUDE" --exclude="*"
+          echo "Hydrating patterns: $INCLUDE"
+          git lfs pull --include="$INCLUDE"
           count=$(find VideoFlash -maxdepth 1 -type f -name '*_DFA_*.flv' -size +1000c | wc -l)
+          pointers=$(find VideoFlash -maxdepth 1 -type f -name '*_DFA_*.flv' -size -1000c | wc -l)
           echo "Fetched real video clips: $count"
+          echo "Remaining pointer-sized DFA files: $pointers"
           test "$count" -ge 120
       - name: Run actor-disjoint CREMA-D benchmark
         run: python experiments/run_cremad_empirical.py /tmp/crema-d/VideoFlash
