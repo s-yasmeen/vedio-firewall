@@ -13,12 +13,10 @@
 <body>
   <div class="app-shell">
     <aside class="sidebar" aria-label="Primary navigation">
-      <div class="brand">
-        <div class="brand-mark">T</div>
-        <div><strong>TAPF-MIN</strong><span>Edge Privacy Firewall</span></div>
-      </div>
+      <div class="brand"><div class="brand-mark">T</div><div><strong>TAPF-MIN</strong><span>Edge Privacy Firewall</span></div></div>
       <nav class="nav-list">
         <button class="nav-item active" data-view="overview">Overview</button>
+        <button class="nav-item" data-view="device">Device Demo</button>
         <button class="nav-item" data-view="evaluate">Release Gate</button>
         <button class="nav-item" data-view="attestations">Attestations</button>
       </nav>
@@ -26,51 +24,31 @@
     </aside>
 
     <main class="main">
-      <header class="topbar">
-        <div>
-          <p class="eyebrow">MINIMIZE → VERIFY → RELEASE</p>
-          <h1>Biometric Release Control</h1>
-        </div>
-        <div class="status-group">
-          <span id="healthBadge" class="badge neutral">Checking service…</span>
-          <button id="installBtn" class="secondary hidden" type="button">Install app</button>
-        </div>
-      </header>
+      <header class="topbar"><div><p class="eyebrow">MINIMIZE → VERIFY → RELEASE</p><h1>Biometric Release Control</h1></div><div class="status-group"><span id="healthBadge" class="badge neutral">Checking service…</span><button id="installBtn" class="secondary hidden" type="button">Install app</button></div></header>
 
       <section id="overview" class="view active" aria-labelledby="overviewTitle">
         <div class="hero-grid">
-          <article class="panel hero-panel">
-            <p class="eyebrow">Deployment state</p>
-            <h2 id="overviewTitle">Release only what the task needs.</h2>
-            <p class="lead">TAPF-MIN keeps raw biometric video on-device, selects a minimum authorized representation, evaluates measured privacy and utility evidence, and fails closed when the evidence is insufficient.</p>
-            <div class="hero-actions">
-              <button class="primary" type="button" data-jump="evaluate">Evaluate release</button>
-              <button class="secondary" type="button" id="refreshHealth">Refresh health</button>
-            </div>
+          <article class="panel hero-panel"><p class="eyebrow">Deployment state</p><h2 id="overviewTitle">Release only what the task needs.</h2><p class="lead">TAPF-MIN keeps raw biometric video on-device, selects a minimum authorized representation, evaluates measured privacy and utility evidence, and fails closed when the evidence is insufficient.</p><div class="hero-actions"><button class="primary" type="button" data-jump="device">Open device demo</button><button class="secondary" type="button" data-jump="evaluate">Evaluate release</button><button class="secondary" type="button" id="refreshHealth">Refresh health</button></div></article>
+          <article class="panel risk-panel"><div class="ring" aria-label="Visual privacy status"><span id="riskRingValue">BLOCK</span></div><div><p class="eyebrow">Protected-video policy</p><h3>Fail closed</h3><p>Current visual masking is not considered sufficient protection under modern identity attacks. Use task-specific representations whenever possible.</p></div></article>
+        </div>
+        <div class="metric-grid"><article class="metric"><span>Service</span><strong id="serviceState">—</strong><small>API liveness</small></article><article class="metric"><span>Readiness</span><strong id="readyState">—</strong><small>auth + signing</small></article><article class="metric"><span>Raw frames</span><strong>OFF</strong><small>server ingestion</small></article><article class="metric"><span>Release policy</span><strong>FAIL-CLOSED</strong><small>default</small></article></div>
+        <article class="panel pipeline-panel"><div class="panel-head"><div><p class="eyebrow">Live architecture</p><h3>Task-conditioned minimum disclosure</h3></div></div><div class="pipeline" aria-label="TAPF-MIN processing pipeline"><div class="step"><b>1</b><span>Task</span><small>authorize need</small></div><i>→</i><div class="step"><b>2</b><span>Representation</span><small>minimize disclosure</small></div><i>→</i><div class="step"><b>3</b><span>Verify</span><small>privacy + utility</small></div><i>→</i><div class="step"><b>4</b><span>Gate</span><small>release or block</small></div><i>→</i><div class="step"><b>5</b><span>Attest</span><small>signed evidence</small></div></div></article>
+      </section>
+
+      <section id="device" class="view" aria-labelledby="deviceTitle">
+        <div class="section-heading"><div><p class="eyebrow">On-device prototype</p><h2 id="deviceTitle">Patient camera stays local</h2></div><span class="badge ok">No frame upload</span></div>
+        <div class="two-col">
+          <article class="panel camera-panel">
+            <div class="camera-stage"><video id="localCamera" autoplay playsinline muted></video><div id="cameraPlaceholder" class="camera-placeholder"><strong>Local camera off</strong><small>Start the camera to demonstrate on-device capture.</small></div><span class="local-only-chip">LOCAL ONLY</span></div>
+            <div class="form-actions"><button id="startCamera" class="primary" type="button">Start local camera</button><button id="stopCamera" class="secondary" type="button" disabled>Stop camera</button></div>
+            <p id="cameraMessage" class="form-message" aria-live="polite">Frames are rendered only in this browser view. This prototype does not send camera frames to the server.</p>
           </article>
-          <article class="panel risk-panel">
-            <div class="ring" aria-label="Visual privacy status"><span id="riskRingValue">BLOCK</span></div>
-            <div><p class="eyebrow">Protected-video policy</p><h3>Fail closed</h3><p>Current visual masking is not considered sufficient protection under modern identity attacks. Use task-specific representations whenever possible.</p></div>
+          <article class="panel decision-panel">
+            <p class="eyebrow">What leaves the device?</p><h3>Only authorized evidence</h3>
+            <div class="device-flow"><div><strong>1 · CAPTURE</strong><span>Raw face stays in browser/device memory</span></div><div><strong>2 · MINIMIZE</strong><span>Generate the task-specific representation locally</span></div><div><strong>3 · VERIFY</strong><span>Evaluate privacy, utility and temporal evidence</span></div><div><strong>4 · RELEASE</strong><span>Transmit representation only if the gate passes</span></div></div>
+            <button class="primary" type="button" data-jump="evaluate">Continue to release gate</button>
           </article>
         </div>
-
-        <div class="metric-grid">
-          <article class="metric"><span>Service</span><strong id="serviceState">—</strong><small>API liveness</small></article>
-          <article class="metric"><span>Readiness</span><strong id="readyState">—</strong><small>auth + signing</small></article>
-          <article class="metric"><span>Raw frames</span><strong>OFF</strong><small>server ingestion</small></article>
-          <article class="metric"><span>Release policy</span><strong>FAIL-CLOSED</strong><small>default</small></article>
-        </div>
-
-        <article class="panel pipeline-panel">
-          <div class="panel-head"><div><p class="eyebrow">Live architecture</p><h3>Task-conditioned minimum disclosure</h3></div></div>
-          <div class="pipeline" aria-label="TAPF-MIN processing pipeline">
-            <div class="step"><b>1</b><span>Task</span><small>authorize need</small></div>
-            <i>→</i><div class="step"><b>2</b><span>Representation</span><small>minimize disclosure</small></div>
-            <i>→</i><div class="step"><b>3</b><span>Verify</span><small>privacy + utility</small></div>
-            <i>→</i><div class="step"><b>4</b><span>Gate</span><small>release or block</small></div>
-            <i>→</i><div class="step"><b>5</b><span>Attest</span><small>signed evidence</small></div>
-          </div>
-        </article>
       </section>
 
       <section id="evaluate" class="view" aria-labelledby="evaluateTitle">
@@ -78,51 +56,20 @@
         <div class="two-col">
           <form id="releaseForm" class="panel form-panel">
             <div class="field-row"><label>Task<select id="task" required><option value="expression">Expression</option><option value="movement">Movement</option><option value="rppg">rPPG</option><option value="authentication">Authentication</option><option value="visual_exam">Visual examination</option></select></label><label>Representation<select id="representation" required></select></label></div>
-            <div class="threshold-grid">
-              <label>Privacy upper<input id="privacyThreshold" type="number" min="0" max="1" step="0.01" value="0.25"></label>
-              <label>Utility lower<input id="utilityThreshold" type="number" min="0" max="1" step="0.01" value="0.75"></label>
-              <label>Temporal upper<input id="temporalThreshold" type="number" min="0" max="1" step="0.01" value="0.30"></label>
-              <label>Latency max (ms)<input id="latencyThreshold" type="number" min="1" max="60000" step="1" value="150"></label>
-            </div>
+            <div class="threshold-grid"><label>Privacy upper<input id="privacyThreshold" type="number" min="0" max="1" step="0.01" value="0.25"></label><label>Utility lower<input id="utilityThreshold" type="number" min="0" max="1" step="0.01" value="0.75"></label><label>Temporal upper<input id="temporalThreshold" type="number" min="0" max="1" step="0.01" value="0.30"></label><label>Latency max (ms)<input id="latencyThreshold" type="number" min="1" max="60000" step="1" value="150"></label></div>
             <div class="panel-head compact"><div><p class="eyebrow">Measured operating point</p><h3>Evidence</h3></div></div>
-            <div class="threshold-grid">
-              <label>α<input id="alpha" type="number" min="0" max="1" step="0.05" value="0.50"></label>
-              <label>Identity risk<input id="identityRisk" type="number" min="0" max="1" step="0.01" value="0.18"></label>
-              <label>Identity upper<input id="identityUpper" type="number" min="0" max="1" step="0.01" value="0.22"></label>
-              <label>Task utility<input id="taskUtility" type="number" min="0" max="1" step="0.01" value="0.84"></label>
-              <label>Utility lower<input id="utilityLower" type="number" min="0" max="1" step="0.01" value="0.79"></label>
-              <label>Temporal risk<input id="temporalRisk" type="number" min="0" max="1" step="0.01" value="0.19"></label>
-              <label>Temporal upper<input id="temporalUpper" type="number" min="0" max="1" step="0.01" value="0.24"></label>
-              <label>Latency (ms)<input id="latency" type="number" min="0" max="60000" step="1" value="72"></label>
-            </div>
-            <label>Evaluator ID<input id="evaluatorId" value="edge-evaluator-v1" maxlength="256"></label>
-            <label>Sample count<input id="sampleCount" type="number" min="1" value="120"></label>
-            <label>API key (optional for local demo)<input id="apiKey" type="password" autocomplete="off" placeholder="Bearer token when configured"></label>
-            <div class="form-actions"><button class="primary" type="submit">Run release gate</button><button class="secondary" id="loadBlocked" type="button">Load fail-closed example</button></div>
-            <p id="formMessage" class="form-message" aria-live="polite"></p>
+            <div class="threshold-grid"><label>α<input id="alpha" type="number" min="0" max="1" step="0.05" value="0.50"></label><label>Identity risk<input id="identityRisk" type="number" min="0" max="1" step="0.01" value="0.18"></label><label>Identity upper<input id="identityUpper" type="number" min="0" max="1" step="0.01" value="0.22"></label><label>Task utility<input id="taskUtility" type="number" min="0" max="1" step="0.01" value="0.84"></label><label>Utility lower<input id="utilityLower" type="number" min="0" max="1" step="0.01" value="0.79"></label><label>Temporal risk<input id="temporalRisk" type="number" min="0" max="1" step="0.01" value="0.19"></label><label>Temporal upper<input id="temporalUpper" type="number" min="0" max="1" step="0.01" value="0.24"></label><label>Latency (ms)<input id="latency" type="number" min="0" max="60000" step="1" value="72"></label></div>
+            <label>Evaluator ID<input id="evaluatorId" value="edge-evaluator-v1" maxlength="256"></label><label>Sample count<input id="sampleCount" type="number" min="1" value="120"></label><label>API key (optional for local demo)<input id="apiKey" type="password" autocomplete="off" placeholder="Bearer token when configured"></label>
+            <div class="form-actions"><button class="primary" type="submit">Run release gate</button><button class="secondary" id="loadBlocked" type="button">Load fail-closed example</button></div><p id="formMessage" class="form-message" aria-live="polite"></p>
           </form>
-
-          <article class="panel decision-panel">
-            <p class="eyebrow">Decision</p>
-            <div id="decisionIcon" class="decision-icon neutral">—</div>
-            <h3 id="decisionTitle">Waiting for evidence</h3>
-            <p id="decisionReason">Submit a measured operating point to evaluate the release policy.</p>
-            <dl class="decision-details"><div><dt>Selected α</dt><dd id="selectedAlpha">—</dd></div><div><dt>Representation</dt><dd id="selectedRep">—</dd></div><div><dt>Evidence hash</dt><dd id="evidenceHash">—</dd></div><div><dt>Request ID</dt><dd id="requestId">—</dd></div></dl>
-          </article>
+          <article class="panel decision-panel"><p class="eyebrow">Decision</p><div id="decisionIcon" class="decision-icon neutral">—</div><h3 id="decisionTitle">Waiting for evidence</h3><p id="decisionReason">Submit a measured operating point to evaluate the release policy.</p><dl class="decision-details"><div><dt>Selected α</dt><dd id="selectedAlpha">—</dd></div><div><dt>Representation</dt><dd id="selectedRep">—</dd></div><div><dt>Evidence hash</dt><dd id="evidenceHash">—</dd></div><div><dt>Request ID</dt><dd id="requestId">—</dd></div></dl></article>
         </div>
       </section>
 
-      <section id="attestations" class="view" aria-labelledby="attestTitle">
-        <div class="section-heading"><div><p class="eyebrow">Evidence trail</p><h2 id="attestTitle">Recent local attestations</h2></div><button id="clearHistory" class="secondary" type="button">Clear session</button></div>
-        <div id="attestationList" class="attestation-list"><article class="panel empty">No release evaluations in this session.</article></div>
-      </section>
+      <section id="attestations" class="view" aria-labelledby="attestTitle"><div class="section-heading"><div><p class="eyebrow">Evidence trail</p><h2 id="attestTitle">Recent local attestations</h2></div><button id="clearHistory" class="secondary" type="button">Clear session</button></div><div id="attestationList" class="attestation-list"><article class="panel empty">No release evaluations in this session.</article></div></section>
     </main>
 
-    <nav class="mobile-nav" aria-label="Mobile navigation">
-      <button class="mobile-nav-item active" data-view="overview">Home</button>
-      <button class="mobile-nav-item" data-view="evaluate">Gate</button>
-      <button class="mobile-nav-item" data-view="attestations">Proof</button>
-    </nav>
+    <nav class="mobile-nav" aria-label="Mobile navigation"><button class="mobile-nav-item active" data-view="overview">Home</button><button class="mobile-nav-item" data-view="device">Device</button><button class="mobile-nav-item" data-view="evaluate">Gate</button><button class="mobile-nav-item" data-view="attestations">Proof</button></nav>
   </div>
   <script src="/app/app.js" defer></script>
 </body>
