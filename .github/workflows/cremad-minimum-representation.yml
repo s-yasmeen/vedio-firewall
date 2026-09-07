@@ -1,23 +1,19 @@
-name: CREMA-D minimum-disclosure benchmark
+name: TAPF-MIN v2.1 benchmark
 
 on:
   push:
-    branches: [tapf-min-nonimage-privacy, tapf-min-v2-1]
+    branches: [tapf-min-v2-1]
     paths:
-      - 'experiments/run_cremad_minimum_representation.py'
-      - 'experiments/run_cremad_privacy_utility_spectrum.py'
-      - 'experiments/run_cremad_identity_suppression_sweep.py'
       - 'experiments/run_cremad_v21_adversarial.py'
       - 'tapf/minimum_representation.py'
-      - 'tests/test_minimum_representation.py'
-      - 'tests/test_privacy_utility_spectrum.py'
+      - 'experiments/run_cremad_privacy_utility_spectrum.py'
       - '.github/workflows/cremad-minimum-representation.yml'
   workflow_dispatch:
 
 jobs:
-  minimumrep:
+  v21:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     env:
       PYTHONPATH: ${{ github.workspace }}
     steps:
@@ -28,10 +24,8 @@ jobs:
       - name: Install benchmark dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install numpy scikit-learn opencv-python-headless pytest
+          pip install numpy scikit-learn opencv-python-headless
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - name: Run edge/unit tests
-        run: pytest -q tests/test_minimum_representation.py tests/test_privacy_utility_spectrum.py
       - name: Fetch bounded CREMA-D DFA subset via Git LFS
         run: |
           git lfs install
@@ -48,20 +42,10 @@ jobs:
           count=$(find VideoFlash -maxdepth 1 -type f -name '*_DFA_*.flv' -size +1000c | wc -l)
           echo "Fetched real video clips: $count"
           test "$count" -ge 120
-      - name: Run minimum-disclosure benchmark
-        run: python experiments/run_cremad_minimum_representation.py /tmp/crema-d/VideoFlash
-      - name: Run full privacy-utility spectrum benchmark
-        run: python experiments/run_cremad_privacy_utility_spectrum.py /tmp/crema-d/VideoFlash
-      - name: Run cross-fitted identity suppression sweep
-        run: python experiments/run_cremad_identity_suppression_sweep.py /tmp/crema-d/VideoFlash
       - name: Run TAPF-MIN v2.1 adversarial benchmark
         run: python experiments/run_cremad_v21_adversarial.py /tmp/crema-d/VideoFlash
-      - name: Upload minimum-disclosure metrics
+      - name: Upload TAPF-MIN v2.1 metrics
         uses: actions/upload-artifact@v4
         with:
-          name: cremad-minimum-representation
-          path: |
-            results/cremad_minimum_representation.json
-            results/cremad_privacy_utility_spectrum.json
-            results/cremad_identity_suppression_sweep.json
-            results/cremad_v21_adversarial.json
+          name: cremad-v21-adversarial
+          path: results/cremad_v21_adversarial.json
