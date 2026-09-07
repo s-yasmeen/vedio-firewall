@@ -9,6 +9,7 @@ on:
       - 'Dockerfile'
       - 'requirements*.txt'
       - 'tests/test_service.py'
+      - 'tests/test_deployment_hardening.py'
       - '.github/workflows/deployment-smoke.yml'
   pull_request:
     branches: [main]
@@ -18,6 +19,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       PYTHONPATH: ${{ github.workspace }}
+      TAPF_ATTESTATION_SECRET: ci-only-test-secret
+      TAPF_ATTESTATION_KEY_ID: ci-test-key
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -27,13 +30,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements-deploy.txt
-      - name: Run service tests
-        run: pytest -q tests/test_service.py tests/test_controller.py tests/test_transforms.py
+      - name: Run deployment and core tests
+        run: pytest -q tests/test_service.py tests/test_deployment_hardening.py tests/test_controller.py tests/test_transforms.py
       - name: Build deployment image
         run: docker build -t tapf-min:test .
       - name: Start deployment image
         run: |
-          docker run -d --name tapf-min-test -p 8080:8080 tapf-min:test
+          docker run -d --name tapf-min-test -e TAPF_ATTESTATION_SECRET=ci-only-test-secret -e TAPF_ATTESTATION_KEY_ID=ci-test-key -p 8080:8080 tapf-min:test
           sleep 8
       - name: Verify health endpoint
         run: |
@@ -43,7 +46,30 @@ jobs:
           assert data['status']=='ok'
           assert data['fail_closed'] is True
           assert data['raw_biometric_ingestion'] is False
+          assert data['bounded_release_api'] is True
+          assert data['attestation_signing_configured'] is True
           print(data)
+          PY
+      - name: Verify bounded fail-closed release endpoint
+        run: |
+          python - <<'PY'
+          import json, urllib.request
+          from datetime import datetime, timezone
+          payload={
+            'task':'authentication','representation':'protected-video',
+            'measured_at':datetime.now(timezone.utc).isoformat(),
+            'operating_points':[{
+              'alpha':0.5,'identity_risk':0.1,'identity_risk_upper':0.2,
+              'task_utility':0.9,'task_utility_lower':0.8,
+              'temporal_risk':0.1,'temporal_risk_upper':0.2,
+              'latency_ms':50,'evaluator_id':'ci','sample_count':10
+            }]
+          }
+          req=urllib.request.Request('http://127.0.0.1:8080/v2/release/evaluate', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'})
+          data=json.load(urllib.request.urlopen(req, timeout=5))
+          assert data['decision']=='BLOCK'
+          assert data['reason']=='representation_not_authorized_for_task'
+          print(data['decision'], data['reason'])
           PY
       - name: Container logs on failure
         if: failure()
