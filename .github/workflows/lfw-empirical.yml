@@ -1,0 +1,33 @@
+name: LFW empirical privacy benchmark
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [tapf-min-research]
+    paths:
+      - '.github/workflows/lfw-empirical.yml'
+      - 'experiments/run_lfw_privacy.py'
+      - 'tapf/**'
+
+jobs:
+  lfw:
+    runs-on: ubuntu-latest
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: Run empirical LFW identity-leakage baseline
+        run: python experiments/run_lfw_privacy.py
+      - name: Upload empirical metrics
+        uses: actions/upload-artifact@v4
+        with:
+          name: lfw-privacy-baseline
+          path: results/lfw_privacy_baseline.json
+          if-no-files-found: error
