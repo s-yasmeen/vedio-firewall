@@ -1,0 +1,12 @@
+{
+  "research_name": "TAPF-MIN",
+  "objective": "minimum task-sufficient biometric disclosure",
+  "privacy_threshold": 0.25,
+  "utility_threshold": 0.75,
+  "temporal_threshold": 0.30,
+  "alpha_start": 0.0,
+  "alpha_stop": 1.0,
+  "alpha_step": 0.05,
+  "fail_closed": true,
+  "note": "Default thresholds are demonstration configuration only. Publication thresholds must be calibrated on validation data before final test evaluation."
+}
