@@ -1,0 +1,13 @@
+# Core dependencies
+-r requirements.txt
+
+# Publication-grade identity attackers (optional; not installed in CI)
+insightface==1.0.1
+onnxruntime>=1.20
+facenet-pytorch>=2.6
+torch>=2.4
+torchvision>=0.19
+
+# NOTE:
+# InsightFace code and pretrained model assets have separate licensing/usage terms.
+# Record model package, model pack, weights, provider, and version in every experiment.
