@@ -6,72 +6,114 @@ TAPF-MIN is a research prototype for controlling what biometric information is a
 
 > What is the minimum task-sufficient representation that can be released while measured identity exposure remains below a predefined risk threshold?
 
-## Novel research core
+## Core mechanisms
 
 TAPF-MIN implements six first-class mechanisms:
 
-1. **Minimum disclosure** — search for the weakest transformation that satisfies privacy and utility constraints.
+1. **Minimum disclosure** — select the smallest authorized task representation rather than automatically transmitting a face/video stream.
 2. **Task-conditioned release** — preservation targets depend on the authorized downstream task.
 3. **Attacker-verified privacy** — release depends on measured identity risk, not visual appearance alone.
-4. **Temporal privacy accounting** — sequence-level evidence is monitored because identity leakage can accumulate across video frames.
-5. **Fail-closed behavior** — if no operating point satisfies the release policy, the protected stream is blocked.
-6. **Privacy–utility attestation** — every release decision can emit a machine-readable record of the measured operating point and policy thresholds.
+4. **Temporal privacy accounting** — sequence-level evidence is monitored because identity leakage can accumulate across repeated releases.
+5. **Fail-closed behavior** — if no operating point satisfies the release policy, the system blocks release.
+6. **Privacy–utility attestation** — release decisions can emit a machine-readable record of the evidence, thresholds and decision.
 
-## Important scientific guardrail
+## Integrated prototype status
 
-The repository initially includes a deterministic simulation harness so the controller can be executed and tested without biometric data. Simulation outputs are **not research results**. Publication claims require replacing the simulation adapters with measured identity attackers and downstream task models.
+The current competition prototype includes:
 
-## Recommended real-data benchmark
+- Edge representation adapters for motion, physiological-signal research proxy, action-unit integration, and cancelable authentication templates.
+- Conservative `/v2/release/evaluate` API using privacy upper bounds, utility lower bounds, temporal upper bounds, latency limits and authorized task/representation mappings.
+- Optional API authentication and signed prototype attestations.
+- Installable TAPF-MIN Edge PWA.
+- A browser local-camera demonstration using `getUserMedia`; the interface contains no camera-frame upload path.
+- Docker/Kubernetes deployment assets and health/readiness endpoints.
+- Real-data CREMA-D privacy–utility benchmarks including minimum-disclosure and v2.1 adversarial/disentanglement experiments.
+
+See `PROJECT_COMPLETION.md` for the implementation boundary and remaining research upgrades.
+
+## Scientific guardrails
+
+- A visually altered face is not assumed to be private.
+- Passing the tested attacker ensemble is empirical evidence under that threat model, not proof of anonymity.
+- CREMA-D emotion recognition is a controlled utility benchmark, not clinical diagnostic validation.
+- The current v2.1 model is a feature-level adversarial/disentanglement prototype using the validated temporal motion descriptor; a final raw-video MobileNet/temporal encoder remains a research upgrade.
+- Protected-video release remains fail-closed unless separately validated.
+- Simulation outputs are not research results.
+
+## Benchmark datasets
 
 - **CREMA-D** — primary video benchmark: actor identity + temporal facial emotion task in the same clips.
 - **LFW** — external identity/privacy benchmark.
 - **FER+ / FER2013** — external expression-utility validation.
 
-Do not commit the full biometric datasets to this repository. Add dataset download/preparation scripts or documented manual-access steps and preserve license conditions.
+Do not commit full biometric datasets. Preserve dataset licenses and access conditions.
 
 ## Architecture
 
 ```text
-Patient video
+PATIENT DEVICE / EDGE
+
+Camera / video
     |
     v
-Task policy ---> Candidate representation / transform(alpha)
-    |                         |
-    |                         v
-    |                 Identity attacker(s)
-    |                         |
-    |                         v
-    |                 Temporal risk account
-    |                         |
-    |                         v
-    +-----------------> Utility evaluator
-                              |
-                              v
-                    Privacy–Utility Gate
-                         /          \
-                      PASS          FAIL
-                       |              |
-                    RELEASE       ADAPT/BLOCK
-                       |
-                       v
-                  Attestation
+Authorized task
+    |
+    v
+Minimum task representation
+    |
+    +------> independent identity-risk evaluation
+    |
+    +------> task-utility evaluation
+    |
+    +------> temporal-risk evaluation
+    |
+    v
+Conservative Privacy–Utility Gate
+        /              \
+     PASS              FAIL
+      |                  |
+   RELEASE            BLOCK
+      |
+      v
+Privacy–Utility Attestation
 ```
 
-## Quick start
+The release-decision service itself accepts **measured evidence**, not raw biometric frames.
+
+## Local prototype
 
 ```bash
-pip install -r requirements.txt
-python experiments/run_simulation.py
-pytest -q
+pip install -r requirements-deploy.txt
+uvicorn service.app:app --host 127.0.0.1 --port 8080
 ```
 
-## Publication path
+Open `http://127.0.0.1:8080/app/`.
 
-Replace the simulation adapters with:
+For deployment-like readiness checks, configure:
 
-- ArcFace + FaceNet + an unseen independent attacker for identity leakage.
-- CREMA-D subject-disjoint emotion classifier for task utility.
-- Sequence-level identity aggregation for temporal leakage.
-- Original, blur, pixelation, static TAPF, adaptive TAPF, and TAPF-MIN as baselines.
+```bash
+export TAPF_API_KEY='replace-me'
+export TAPF_ATTESTATION_SECRET='replace-me'
+```
 
-Only measured results should appear in a paper or competition slide.
+Then run:
+
+```bash
+pytest -q
+python experiments/run_simulation.py
+```
+
+## Research evaluation path
+
+Current experiments include:
+
+- conventional visual-transform baselines;
+- CREMA-D minimum-representation benchmark;
+- privacy–utility disclosure spectrum;
+- cross-fitted linear identity-suppression baseline;
+- TAPF-MIN v2.1 adversarial/disentanglement feature-level benchmark;
+- independent post-hoc identity attacks and confidence intervals.
+
+Next research upgrades are external-dataset validation, raw-video temporal encoding, neural/open-set/linkage attackers, repeated-release temporal attacks, device profiling, fairness evaluation and healthcare-specific task validation.
+
+**Only final measured results should appear in a publication or competition slide.**
