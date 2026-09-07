@@ -21,6 +21,7 @@ jobs:
       PYTHONPATH: ${{ github.workspace }}
       TAPF_ATTESTATION_SECRET: ci-only-test-secret
       TAPF_ATTESTATION_KEY_ID: ci-test-key
+      TAPF_API_KEY: ci-api-key
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -36,27 +37,31 @@ jobs:
         run: docker build -t tapf-min:test .
       - name: Start deployment image
         run: |
-          docker run -d --name tapf-min-test -e TAPF_ATTESTATION_SECRET=ci-only-test-secret -e TAPF_ATTESTATION_KEY_ID=ci-test-key -p 8080:8080 tapf-min:test
+          docker run -d --name tapf-min-test \
+            -e TAPF_ATTESTATION_SECRET=ci-only-test-secret \
+            -e TAPF_ATTESTATION_KEY_ID=ci-test-key \
+            -e TAPF_API_KEY=ci-api-key \
+            -p 8080:8080 tapf-min:test
           sleep 8
-      - name: Verify health endpoint
+      - name: Verify liveness and readiness endpoints
         run: |
           python - <<'PY'
           import json, urllib.request
-          data=json.load(urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5))
-          assert data['status']=='ok'
-          assert data['fail_closed'] is True
-          assert data['raw_biometric_ingestion'] is False
-          assert data['bounded_release_api'] is True
-          assert data['attestation_signing_configured'] is True
-          print(data)
+          health=json.load(urllib.request.urlopen('http://127.0.0.1:8080/healthz', timeout=5))
+          ready=json.load(urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=5))
+          assert health['status']=='ok' and health['fail_closed'] is True
+          assert health['raw_biometric_ingestion'] is False and health['bounded_release_api'] is True
+          assert health['attestation_signing_configured'] is True and health['api_auth_configured'] is True
+          assert ready['ready'] is True
+          print(health, ready)
           PY
-      - name: Verify bounded fail-closed release endpoint
+      - name: Verify bounded authenticated fail-closed release endpoint
         run: |
           python - <<'PY'
           import json, urllib.request
           from datetime import datetime, timezone
           payload={
-            'task':'authentication','representation':'protected-video',
+            'request_id':'ci-request-0001','task':'authentication','representation':'protected-video',
             'measured_at':datetime.now(timezone.utc).isoformat(),
             'operating_points':[{
               'alpha':0.5,'identity_risk':0.1,'identity_risk_upper':0.2,
@@ -65,10 +70,16 @@ jobs:
               'latency_ms':50,'evaluator_id':'ci','sample_count':10
             }]
           }
-          req=urllib.request.Request('http://127.0.0.1:8080/v2/release/evaluate', data=json.dumps(payload).encode(), headers={'Content-Type':'application/json'})
+          req=urllib.request.Request(
+            'http://127.0.0.1:8080/v2/release/evaluate',
+            data=json.dumps(payload).encode(),
+            headers={'Content-Type':'application/json','Authorization':'Bearer ci-api-key'}
+          )
           data=json.load(urllib.request.urlopen(req, timeout=5))
           assert data['decision']=='BLOCK'
           assert data['reason']=='representation_not_authorized_for_task'
+          assert len(data['evidence_sha256'])==64
+          assert data['attestation']['signature']['algorithm']=='HMAC-SHA256'
           print(data['decision'], data['reason'])
           PY
       - name: Container logs on failure
