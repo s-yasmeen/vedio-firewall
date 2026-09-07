@@ -4,18 +4,38 @@ import cv2
 import numpy as np
 
 
-def _face_roi(frame: np.ndarray):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-    detector = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
-    if len(faces):
-        x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
-        return int(x), int(y), int(w), int(h)
+def _center_roi(frame: np.ndarray):
     h, w = frame.shape[:2]
-    side = int(min(h, w) * 0.60)
+    side = max(2, int(min(h, w) * 0.60))
     x = max(0, (w - side) // 2)
     y = max(0, (h - side) // 2)
     return x, y, side, side
+
+
+def _face_roi(frame: np.ndarray):
+    """Return a face ROI when legacy Haar APIs exist; otherwise fail safely to center ROI.
+
+    The fallback keeps the transform pipeline deterministic across OpenCV versions. It is
+    a robustness fallback, not a claim of accurate face localization.
+    """
+    try:
+        if not hasattr(cv2, "CascadeClassifier"):
+            return _center_roi(frame)
+        data = getattr(cv2, "data", None)
+        haar_root = getattr(data, "haarcascades", None) if data is not None else None
+        if not haar_root:
+            return _center_roi(frame)
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        detector = cv2.CascadeClassifier(haar_root + "haarcascade_frontalface_default.xml")
+        if hasattr(detector, "empty") and detector.empty():
+            return _center_roi(frame)
+        faces = detector.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=5, minSize=(40, 40))
+        if len(faces):
+            x, y, w, h = max(faces, key=lambda f: f[2] * f[3])
+            return int(x), int(y), int(w), int(h)
+    except Exception:
+        pass
+    return _center_roi(frame)
 
 
 def original(frame: np.ndarray, alpha: float = 0.0) -> np.ndarray:
