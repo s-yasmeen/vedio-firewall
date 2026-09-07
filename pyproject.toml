@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tapf-min"
+version = "0.2.0"
+description = "Verified minimum-disclosure biometric release controller for telemedicine research"
+requires-python = ">=3.11"
+dependencies = [
+  "numpy>=1.26",
+  "opencv-python-headless>=4.9",
+]
+
+[tool.setuptools]
+packages = ["tapf", "service"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
