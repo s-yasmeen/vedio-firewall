@@ -1,0 +1,2 @@
+-r requirements-deploy.txt
+onnxruntime>=1.20

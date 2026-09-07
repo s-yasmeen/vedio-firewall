@@ -1,0 +1,49 @@
+name: FaceNet CREMA-D sequence attack
+
+on:
+  push:
+    branches: [tapf-min-research]
+    paths:
+      - 'experiments/run_facenet_cremad.py'
+      - '.github/workflows/facenet-cremad.yml'
+      - 'tapf/transforms.py'
+  workflow_dispatch:
+
+jobs:
+  facenet:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install FaceNet benchmark dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy scikit-learn opencv-python-headless pillow torch torchvision facenet-pytorch
+      - name: Fetch bounded CREMA-D subset
+        run: |
+          git lfs install
+          rm -rf /tmp/crema-d
+          cd /tmp
+          GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 https://github.com/CheyneyComputerScience/CREMA-D.git crema-d
+          cd crema-d
+          INCLUDE=""
+          for id in $(seq 1001 1012); do
+            if [ -n "$INCLUDE" ]; then INCLUDE="$INCLUDE,"; fi
+            INCLUDE="${INCLUDE}VideoFlash/${id}_DFA_*.flv"
+          done
+          git lfs pull --include="$INCLUDE"
+          count=$(find VideoFlash -maxdepth 1 -type f -name '*_DFA_*.flv' -size +1000c | wc -l)
+          echo "Hydrated clips: $count"
+          test "$count" -ge 60
+      - name: Run FaceNet sequence attack
+        run: python experiments/run_facenet_cremad.py /tmp/crema-d/VideoFlash --max-actors 12
+      - name: Upload FaceNet metrics
+        uses: actions/upload-artifact@v4
+        with:
+          name: cremad-facenet-attack
+          path: results/cremad_facenet_attack.json

@@ -1,0 +1,73 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tapf-min-release
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: tapf-min-release
+  template:
+    metadata:
+      labels:
+        app: tapf-min-release
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: service
+          image: tapf-min:0.3.0
+          ports:
+            - containerPort: 8080
+          env:
+            - name: TAPF_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: tapf-min-secrets
+                  key: api-key
+            - name: TAPF_ATTESTATION_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: tapf-min-secrets
+                  key: attestation-secret
+            - name: TAPF_ATTESTATION_KEY_ID
+              value: production-key
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            capabilities:
+              drop: ["ALL"]
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "1"
+              memory: "512Mi"
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: 8080
+            initialDelaySeconds: 5
+            periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tapf-min-release
+spec:
+  selector:
+    app: tapf-min-release
+  ports:
+    - port: 80
+      targetPort: 8080
+  type: ClusterIP

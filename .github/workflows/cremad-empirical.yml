@@ -1,0 +1,52 @@
+name: CREMA-D empirical privacy-utility benchmark
+
+on:
+  push:
+    branches: [tapf-min-research]
+    paths:
+      - 'experiments/run_cremad_empirical.py'
+      - '.github/workflows/cremad-empirical.yml'
+      - 'tapf/**'
+  workflow_dispatch:
+
+jobs:
+  cremaddfa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install benchmark dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy scikit-learn scikit-image opencv-python-headless
+      - name: Fetch bounded CREMA-D DFA subset via Git LFS
+        run: |
+          git lfs install
+          rm -rf /tmp/crema-d
+          cd /tmp
+          GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 https://github.com/CheyneyComputerScience/CREMA-D.git crema-d
+          cd crema-d
+          INCLUDE=""
+          for id in $(seq 1001 1024); do
+            if [ -n "$INCLUDE" ]; then INCLUDE="$INCLUDE,"; fi
+            INCLUDE="${INCLUDE}VideoFlash/${id}_DFA_*.flv"
+          done
+          echo "Hydrating patterns: $INCLUDE"
+          git lfs pull --include="$INCLUDE"
+          count=$(find VideoFlash -maxdepth 1 -type f -name '*_DFA_*.flv' -size +1000c | wc -l)
+          pointers=$(find VideoFlash -maxdepth 1 -type f -name '*_DFA_*.flv' -size -1000c | wc -l)
+          echo "Fetched real video clips: $count"
+          echo "Remaining pointer-sized DFA files: $pointers"
+          test "$count" -ge 120
+      - name: Run actor-disjoint CREMA-D benchmark
+        run: python experiments/run_cremad_empirical.py /tmp/crema-d/VideoFlash
+      - name: Upload CREMA-D metrics
+        uses: actions/upload-artifact@v4
+        with:
+          name: cremad-empirical-frontier
+          path: results/cremad_empirical_frontier.json
