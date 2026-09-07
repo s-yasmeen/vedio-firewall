@@ -12,10 +12,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt requirements-deploy.txt ./
-RUN pip install --upgrade pip && pip install -r requirements-deploy.txt
+RUN pip install --upgrade pip setuptools wheel && pip install -r requirements-deploy.txt
 
 COPY tapf ./tapf
 COPY service ./service
+COPY frontend ./frontend
 
 RUN useradd --create-home --uid 10001 tapf && chown -R tapf:tapf /app
 USER tapf

@@ -9,17 +9,21 @@ import hashlib
 import hmac
 import json
 import os
+from pathlib import Path
 import uuid
 from typing import List
 
 from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from tapf.controller import ReleasePolicy, MinimumDisclosureController
 from tapf.deployment import BoundedEvidence, DeploymentPolicy, allowed_representations, select_minimum_release
 from tapf.signing import sign_attestation
 
-app = FastAPI(title="TAPF-MIN Release Service", version="0.3.0")
+app = FastAPI(title="TAPF-MIN Release Service", version="0.4.0")
+FRONTEND_DIR = Path(__file__).resolve().parents[1] / "frontend"
 
 
 class OperatingPoint(BaseModel):
@@ -98,11 +102,17 @@ def _evidence_digest(req: BoundedReleaseRequest) -> str:
     return hashlib.sha256(encoded).hexdigest()
 
 
+@app.get("/", include_in_schema=False)
+def root():
+    return RedirectResponse(url="/app/")
+
+
 @app.get("/healthz")
 def healthz():
     return {
         "status":"ok","service":"tapf-min-release","version":app.version,
         "raw_biometric_ingestion":False,"fail_closed":True,"bounded_release_api":True,
+        "ui_available":FRONTEND_DIR.exists(),
         "attestation_signing_configured":bool(os.getenv("TAPF_ATTESTATION_SECRET")),
         "api_auth_configured":bool(os.getenv("TAPF_API_KEY")),
     }
@@ -164,3 +174,7 @@ def evaluate_bounded_release(req: BoundedReleaseRequest, authorization: str | No
     if secret: attestation=sign_attestation(attestation,secret,os.getenv("TAPF_ATTESTATION_KEY_ID","local-hmac"))
     return {**decision,"request_id":req.request_id,"evidence_sha256":digest,"task":req.task,"representation":req.representation,
             "evidence_age_seconds":age,"raw_biometric_ingestion":False,"attestation":attestation}
+
+
+if FRONTEND_DIR.exists():
+    app.mount("/app", StaticFiles(directory=FRONTEND_DIR, html=True), name="tapf-min-ui")

@@ -1,0 +1,1 @@
+{"name":"TAPF-MIN Edge","short_name":"TAPF-MIN","description":"Minimum-disclosure biometric release control","start_url":"/app/","scope":"/app/","display":"standalone","background_color":"#07111c","theme_color":"#0b1320","icons":[{"src":"/app/icon.svg","sizes":"any","type":"image/svg+xml","purpose":"any maskable"}]}
