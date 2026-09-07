@@ -24,7 +24,10 @@ METHODS = {
 
 
 def to_bgr(gray):
-    img = np.clip(gray, 0, 255).astype(np.uint8)
+    arr = np.asarray(gray, dtype=np.float32)
+    if arr.size and float(np.nanmax(arr)) <= 1.5:
+        arr = arr * 255.0
+    img = np.clip(arr, 0, 255).astype(np.uint8)
     return cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
 
 
@@ -99,6 +102,16 @@ def run(min_faces=20, resize=0.7, seed=42):
     y = data.target
     pairs = make_pairs(y, seed=seed)
     labels = np.asarray([p[2] for p in pairs], dtype=int)
+
+    if frames:
+        sanity = {
+            "input_min": int(frames[0].min()),
+            "input_max": int(frames[0].max()),
+            "input_mean": float(frames[0].mean()),
+        }
+        print("LFW pixel sanity:", sanity)
+        if sanity["input_max"] <= 1:
+            raise RuntimeError("LFW pixel scaling sanity check failed")
 
     results = []
     for method, alpha in METHODS.items():
