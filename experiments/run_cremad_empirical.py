@@ -24,6 +24,7 @@ from tapf.transforms import apply_transform
 EMOTIONS = ["ANG","DIS","FEA","HAP","NEU","SAD"]
 ALPHAS = [0.0, 0.25, 0.50, 0.75, 1.0]
 NAME_RE = re.compile(r"^(\d{4})_DFA_(ANG|DIS|FEA|HAP|NEU|SAD)_XX\.flv$", re.I)
+MIN_REAL_VIDEO_BYTES = 1000
 
 
 def desc(frame):
@@ -78,10 +79,19 @@ def risk_from_auc(auc):
 def run(root, train_actors=16, seed=42):
     root=Path(root)
     files=[]
+    skipped_pointers=0
     for p in sorted(root.glob("*.flv")):
         m=NAME_RE.match(p.name)
-        if m: files.append((p,m.group(1),m.group(2)))
+        if not m:
+            continue
+        if p.stat().st_size <= MIN_REAL_VIDEO_BYTES:
+            skipped_pointers += 1
+            continue
+        files.append((p,m.group(1),m.group(2)))
     actors=sorted({a for _,a,_ in files})
+    print(f"hydrated_clips={len(files)} skipped_pointer_stubs={skipped_pointers}")
+    if len(files) < 120:
+        raise RuntimeError(f"Need >=120 hydrated DFA clips; found {len(files)}")
     if len(actors)<8: raise RuntimeError(f"Need >=8 actors; found {len(actors)}")
     train_set=set(actors[:min(train_actors,len(actors)-4)])
     test_set=set(actors)-train_set
@@ -99,7 +109,7 @@ def run(root, train_actors=16, seed=42):
         for i,(p,a,e) in enumerate(files):
             f,s=read_clip(p,alpha)
             if f is not None: frame_X.append(f); seq_X.append(s); keep.append(i)
-        if len(keep)!=len(files): raise RuntimeError("Unreadable clips detected; aborting to preserve split integrity")
+        if len(keep)!=len(files): raise RuntimeError("Unreadable hydrated clips detected; aborting to preserve split integrity")
         frame_X=np.asarray(frame_X); seq_X=np.asarray(seq_X)
         frame_auc=auc_for(frame_X,actor_labels,ps); seq_auc=auc_for(seq_X,actor_labels,ps)
         clf=make_pipeline(StandardScaler(),LogisticRegression(max_iter=2500,class_weight="balanced",random_state=seed))
