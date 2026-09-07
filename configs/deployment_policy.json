@@ -1,0 +1,21 @@
+{
+  "schema": "tapf-min-deployment-policy/v1",
+  "policy_version": "2026-09-07.1",
+  "fail_closed": true,
+  "privacy_upper_threshold": 0.25,
+  "utility_lower_threshold": 0.75,
+  "temporal_upper_threshold": 0.30,
+  "latency_ms_threshold": 150.0,
+  "max_evidence_age_seconds": 300,
+  "release_api": "v2",
+  "raw_biometric_ingestion": false,
+  "required_controls": [
+    "authenticated_release_request",
+    "confidence_bounded_evidence",
+    "worst_case_attacker_ensemble",
+    "task_authorized_representation",
+    "signed_attestation",
+    "strict_fail_closed_localization"
+  ],
+  "notes": "Thresholds are research defaults and require task-specific calibration before clinical deployment."
+}
