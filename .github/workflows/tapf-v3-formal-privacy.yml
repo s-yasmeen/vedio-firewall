@@ -5,12 +5,15 @@ on:
     branches: [tapf-min-v3-formal-privacy]
     paths:
       - 'tapf/formal_privacy.py'
+      - 'tapf/persistent_privacy.py'
       - 'tapf/privacy_kernel.py'
       - 'tapf/fer_v3.py'
       - 'tests/test_formal_privacy.py'
+      - 'tests/test_persistent_privacy.py'
       - 'tests/test_privacy_kernel.py'
       - 'tests/test_fer_v3.py'
       - 'experiments/run_cremad_v3_deep_fer.py'
+      - 'experiments/run_cremad_v3_fixed_model_audit.py'
       - '.github/workflows/tapf-v3-formal-privacy.yml'
   workflow_dispatch:
 
@@ -28,11 +31,18 @@ jobs:
       - name: Install test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install numpy pytest
+          pip install numpy pytest scikit-learn opencv-python-headless
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
       - name: Compile v3 modules
-        run: python -m py_compile tapf/formal_privacy.py tapf/privacy_kernel.py tapf/fer_v3.py experiments/run_cremad_v3_deep_fer.py
-      - name: Run formal privacy and release-kernel tests
-        run: pytest -q tests/test_formal_privacy.py tests/test_privacy_kernel.py
+        run: |
+          python -m py_compile \
+            tapf/formal_privacy.py \
+            tapf/persistent_privacy.py \
+            tapf/privacy_kernel.py \
+            tapf/fer_v3.py \
+            experiments/run_cremad_v3_deep_fer.py \
+            experiments/run_cremad_v3_fixed_model_audit.py
+      - name: Run formal privacy and accounting tests
+        run: pytest -q tests/test_formal_privacy.py tests/test_persistent_privacy.py tests/test_privacy_kernel.py
       - name: Run FER architecture tests
         run: pytest -q tests/test_fer_v3.py
