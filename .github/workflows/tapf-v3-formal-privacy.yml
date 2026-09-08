@@ -5,8 +5,10 @@ on:
     branches: [tapf-min-v3-formal-privacy]
     paths:
       - 'tapf/formal_privacy.py'
+      - 'tapf/privacy_kernel.py'
       - 'tapf/fer_v3.py'
       - 'tests/test_formal_privacy.py'
+      - 'tests/test_privacy_kernel.py'
       - 'tests/test_fer_v3.py'
       - 'experiments/run_cremad_v3_deep_fer.py'
       - '.github/workflows/tapf-v3-formal-privacy.yml'
@@ -29,8 +31,8 @@ jobs:
           pip install numpy pytest
           pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
       - name: Compile v3 modules
-        run: python -m py_compile tapf/formal_privacy.py tapf/fer_v3.py experiments/run_cremad_v3_deep_fer.py
-      - name: Run formal privacy tests
-        run: pytest -q tests/test_formal_privacy.py
+        run: python -m py_compile tapf/formal_privacy.py tapf/privacy_kernel.py tapf/fer_v3.py experiments/run_cremad_v3_deep_fer.py
+      - name: Run formal privacy and release-kernel tests
+        run: pytest -q tests/test_formal_privacy.py tests/test_privacy_kernel.py
       - name: Run FER architecture tests
         run: pytest -q tests/test_fer_v3.py
