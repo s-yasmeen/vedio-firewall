@@ -15,6 +15,7 @@ def test_healthz_is_fail_closed_and_no_raw_ingestion():
     r=client.get('/healthz'); assert r.status_code==200; data=r.json()
     assert data['status']=='ok' and data['fail_closed'] is True
     assert data['raw_biometric_ingestion'] is False and data['bounded_release_api'] is True
+    assert data['composition_guard'] is True
 
 
 def test_readyz_requires_security_configuration(monkeypatch):
@@ -48,7 +49,28 @@ def test_v2_uses_conservative_bounds_latency_and_traceability():
     assert data['decision']=='RELEASE' and data['selected_alpha']==0.5
     assert data['evaluation']['identity_risk_upper']==0.20 and data['evaluation']['task_utility_lower']==0.78
     assert data['evaluation']['latency_pass'] is True and len(data['evidence_sha256'])==64
-    assert data['request_id']=='unit-test-request-001'
+    assert data['request_id']=='unit-test-request-001' and data['composition_guard'] is True
+
+
+def test_v2_repeated_release_requires_composition_evidence():
+    payload=_bounded_payload(); payload['prior_release_count']=1
+    r=client.post('/v2/release/evaluate',json=payload,headers=_auth_headers()); assert r.status_code==200; data=r.json()
+    assert data['decision']=='BLOCK' and data['reason']=='composition_evidence_required'
+
+
+def test_v2_repeated_release_blocks_unsafe_composition():
+    payload=_bounded_payload(); payload.update({'prior_release_count':1,'composition_risk_upper':0.42,
+                                                 'composition_upper_threshold':0.30,'composition_evaluator_id':'repeat-attack-v1'})
+    r=client.post('/v2/release/evaluate',json=payload,headers=_auth_headers()); assert r.status_code==200; data=r.json()
+    assert data['decision']=='BLOCK' and data['reason']=='composition_risk_exceeds_threshold'
+
+
+def test_v2_repeated_release_can_pass_with_bounded_composition_evidence():
+    payload=_bounded_payload(); payload.update({'prior_release_count':1,'composition_risk_upper':0.20,
+                                                 'composition_upper_threshold':0.30,'composition_evaluator_id':'repeat-attack-v1'})
+    r=client.post('/v2/release/evaluate',json=payload,headers=_auth_headers()); assert r.status_code==200; data=r.json()
+    assert data['decision']=='RELEASE' and data['attestation']['composition']['guard_pass'] is True
+    assert data['attestation']['composition']['prior_release_count']==1
 
 
 def test_v2_rejects_representation_not_allowed_for_authentication():
