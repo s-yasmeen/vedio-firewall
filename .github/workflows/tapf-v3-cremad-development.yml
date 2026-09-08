@@ -1,0 +1,53 @@
+name: TAPF-MIN v3 CREMA-D development validation
+
+on:
+  push:
+    branches: [tapf-min-v3-formal-privacy]
+    paths:
+      - 'experiments/run_cremad_v3_deep_fer.py'
+      - 'tapf/fer_v3.py'
+      - 'tapf/formal_privacy.py'
+      - '.github/workflows/tapf-v3-cremad-development.yml'
+  workflow_dispatch:
+
+jobs:
+  deep-fer-development:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install research dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy scikit-learn opencv-python-headless pytest
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - name: Fetch the same bounded CREMA-D DFA cohort used by v2
+        run: |
+          git lfs install
+          rm -rf /tmp/crema-d
+          cd /tmp
+          GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 https://github.com/CheyneyComputerScience/CREMA-D.git crema-d
+          cd crema-d
+          INCLUDE=""
+          for id in $(seq 1001 1024); do
+            if [ -n "$INCLUDE" ]; then INCLUDE="$INCLUDE,"; fi
+            INCLUDE="${INCLUDE}VideoFlash/${id}_DFA_*.flv"
+          done
+          git lfs pull --include="$INCLUDE"
+          count=$(find VideoFlash -maxdepth 1 -type f -name '*_DFA_*.flv' -size +1000c | wc -l)
+          echo "Fetched real video clips: $count"
+          test "$count" -ge 120
+      - name: Run actor-disjoint v3 engineering benchmark
+        run: |
+          python experiments/run_cremad_v3_deep_fer.py /tmp/crema-d/VideoFlash \
+            --folds 3 --epochs 3 --batch-size 8 --frames-per-clip 8 --image-size 96 --seed 42
+      - name: Upload engineering metrics
+        uses: actions/upload-artifact@v4
+        with:
+          name: cremad-v3-deep-fer-development
+          path: results/cremad_v3_deep_fer_formal_privacy.json
