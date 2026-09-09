@@ -1,9 +1,11 @@
 """Face-focused preprocessing for TAPF-MIN FER v3.1.
 
-Research reference implementation using OpenCV's bundled face/eye cascades as a
-lightweight fallback. It performs face detection, optional eye-based in-plane alignment,
-and stable cropping. Production deployments should substitute a stronger landmark model
-while preserving the same explicit detection/alignment reporting contract.
+The preprocessing contract is deliberately conservative: detected faces may be aligned,
+a prior trusted face box may be reused for short detector dropouts, but a first-frame
+failure does NOT fall back to a full/center frame because that can reintroduce background,
+clothing, camera and session identity cues. Instead, the frame is replaced by a neutral
+crop and explicitly marked invalid. Detection/alignment masks are research evidence only
+and must never be released as task output.
 """
 from __future__ import annotations
 from dataclasses import dataclass
@@ -17,13 +19,19 @@ class FaceCropResult:
     crop: np.ndarray
     detected: bool
     aligned: bool
+    valid_face: bool
+    reused_bbox: bool
     bbox: tuple[int,int,int,int] | None
 
 
 class FacePreprocessor:
     def __init__(self, *, output_size: int = 112, margin: float = 0.20):
-        if output_size < 32: raise ValueError('output_size too small')
-        if not 0 <= margin <= 1: raise ValueError('margin must be in [0,1]')
+        if output_size < 32:
+            raise ValueError('output_size too small')
+        if not 0 <= margin <= 1:
+            raise ValueError('margin must be in [0,1]')
+        if not hasattr(cv2, 'CascadeClassifier'):
+            raise RuntimeError('OpenCV build lacks CascadeClassifier; use supported OpenCV 4.x research dependency')
         self.output_size = int(output_size)
         self.margin = float(margin)
         face_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
@@ -43,10 +51,10 @@ class FacePreprocessor:
         eyes=self.eye_detector.detectMultiScale(gray,scaleFactor=1.1,minNeighbors=4,minSize=(10,10))
         if len(eyes) < 2:
             return crop_rgb, False
-        # Prefer two largest detections in the upper two-thirds of the face.
         h,w=gray.shape[:2]
         cand=[e for e in eyes if e[1] + e[3]/2 < 0.68*h]
-        if len(cand) < 2: cand=list(eyes)
+        if len(cand) < 2:
+            cand=list(eyes)
         cand=sorted(cand,key=lambda e:int(e[2])*int(e[3]),reverse=True)[:4]
         centers=[(e[0]+e[2]/2.0,e[1]+e[3]/2.0) for e in cand]
         best=None
@@ -54,10 +62,13 @@ class FacePreprocessor:
             for j in range(i+1,len(centers)):
                 a,b=centers[i],centers[j]
                 dx=abs(a[0]-b[0]); dy=abs(a[1]-b[1])
-                if dx < 0.20*w: continue
+                if dx < 0.20*w:
+                    continue
                 score=dx - 0.5*dy
-                if best is None or score>best[0]: best=(score,a,b)
-        if best is None: return crop_rgb, False
+                if best is None or score>best[0]:
+                    best=(score,a,b)
+        if best is None:
+            return crop_rgb, False
         _,a,b=best
         left,right=(a,b) if a[0] < b[0] else (b,a)
         angle=math.degrees(math.atan2(right[1]-left[1], right[0]-left[0]))
@@ -66,31 +77,52 @@ class FacePreprocessor:
         aligned=cv2.warpAffine(crop_rgb,M,(w,h),flags=cv2.INTER_LINEAR,borderMode=cv2.BORDER_REFLECT_101)
         return aligned, True
 
+    def _neutral_crop(self) -> np.ndarray:
+        # Mid-gray becomes close to zero after ImageNet normalization and contains no scene content.
+        return np.full((self.output_size, self.output_size, 3), 128, dtype=np.uint8)
+
     def crop_face(self, rgb: np.ndarray, *, previous_bbox=None) -> FaceCropResult:
-        if rgb.ndim != 3 or rgb.shape[2] != 3: raise ValueError('rgb must be HxWx3')
+        if rgb.ndim != 3 or rgb.shape[2] != 3:
+            raise ValueError('rgb must be HxWx3')
         h,w = rgb.shape[:2]
         gray=cv2.cvtColor(rgb,cv2.COLOR_RGB2GRAY)
         faces=self.detector.detectMultiScale(gray,scaleFactor=1.1,minNeighbors=5,minSize=(32,32))
         detected=len(faces)>0
+        reused=False
         bbox=None
         if detected:
             x,y,bw,bh=max(faces,key=lambda b:int(b[2])*int(b[3]))
             bbox=self._expand(int(x),int(y),int(bw),int(bh),w,h)
         elif previous_bbox is not None:
             x,y,bw,bh=map(int,previous_bbox)
-            bbox=(max(0,x),max(0,y),min(bw,w-max(0,x)),min(bh,h-max(0,y)))
-        else:
-            side=min(h,w); x=(w-side)//2; y=(h-side)//2; bbox=(x,y,side,side)
+            x=max(0,x); y=max(0,y); bw=min(bw,w-x); bh=min(bh,h-y)
+            if bw > 0 and bh > 0:
+                bbox=(x,y,bw,bh); reused=True
+        if bbox is None:
+            return FaceCropResult(self._neutral_crop(),False,False,False,False,None)
         x,y,bw,bh=bbox
         crop=rgb[y:y+bh,x:x+bw]
-        if crop.size == 0: raise RuntimeError('empty face crop')
+        if crop.size == 0:
+            return FaceCropResult(self._neutral_crop(),False,False,False,reused,None)
         crop,aligned=self._align_by_eyes(crop) if detected else (crop,False)
         crop=cv2.resize(crop,(self.output_size,self.output_size),interpolation=cv2.INTER_AREA)
-        return FaceCropResult(crop=crop,detected=detected,aligned=aligned,bbox=bbox)
+        return FaceCropResult(crop,detected,aligned,True,reused,bbox)
 
     def process_sequence(self, frames_rgb):
-        crops=[]; detections=[]; alignments=[]; prev=None
+        crops=[]; detections=[]; alignments=[]; valid=[]; reused=[]; prev=None
         for frame in frames_rgb:
             res=self.crop_face(frame,previous_bbox=prev)
-            crops.append(res.crop); detections.append(bool(res.detected)); alignments.append(bool(res.aligned)); prev=res.bbox
-        return np.asarray(crops), np.asarray(detections,dtype=bool), np.asarray(alignments,dtype=bool)
+            crops.append(res.crop)
+            detections.append(bool(res.detected))
+            alignments.append(bool(res.aligned))
+            valid.append(bool(res.valid_face))
+            reused.append(bool(res.reused_bbox))
+            if res.bbox is not None:
+                prev=res.bbox
+        return (
+            np.asarray(crops),
+            np.asarray(detections,dtype=bool),
+            np.asarray(alignments,dtype=bool),
+            np.asarray(valid,dtype=bool),
+            np.asarray(reused,dtype=bool),
+        )
