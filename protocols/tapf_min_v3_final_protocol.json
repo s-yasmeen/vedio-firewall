@@ -1,0 +1,46 @@
+{
+  "schema": "tapf-min-v3-final-protocol/v1",
+  "status": "FROZEN_BEFORE_FINAL_TEST",
+  "scientific_scope": "Controlled CREMA-D emotion-recognition/privacy benchmark; not clinical validation or anonymity proof.",
+  "dataset": {
+    "name": "CREMA-D",
+    "task_subset": "DFA six-emotion video clips",
+    "actor_disjoint_required": true,
+    "single_frozen_fer_model_for_privacy_audit": true,
+    "minimum_privacy_audit_actors": 8
+  },
+  "utility_gate": {
+    "metric": "actor-cluster bootstrap macro-F1 lower 95% bound",
+    "minimum": 0.70,
+    "secondary_accuracy_minimum": 0.70
+  },
+  "empirical_privacy_gates": {
+    "closed_set_effective_auc_upper": 0.55,
+    "pairwise_linkage_effective_auc_upper": 0.55,
+    "centroid_linkage_accuracy_advantage_upper": 0.10,
+    "repeated_release_effective_auc_upper": 0.55
+  },
+  "formal_privacy": {
+    "allowed_mechanisms": ["randomized_response_label", "gaussian_quantized_posterior"],
+    "epsilon_per_release_max": 1.0,
+    "delta_per_release_max": 0.000001,
+    "epsilon_scope_budget_max": 4.0,
+    "delta_scope_budget_max": 0.00001,
+    "persistent_accounting_required": true,
+    "duplicate_release_protection_required": true
+  },
+  "minimum_disclosure": {
+    "selection": "smallest disclosure_bits satisfying every utility, empirical-privacy, and formal-budget gate",
+    "raw_video_authorized": false,
+    "task_latent_authorized": false,
+    "categorical_label_bits_for_six_classes": 3
+  },
+  "reporting": {
+    "report_private_release_utility_after_randomization": true,
+    "report_local_utility_separately": true,
+    "report_empirical_privacy_separately_from_dp": true,
+    "report_repeated_release_composition": true,
+    "clinical_claim_allowed": false,
+    "anonymity_claim_allowed": false
+  }
+}
