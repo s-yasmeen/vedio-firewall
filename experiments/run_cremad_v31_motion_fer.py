@@ -1,11 +1,12 @@
 """TAPF-MIN v3.1 FER repair benchmark on CREMA-D.
 
-Ablates the dominant weaknesses found in v3:
+Development-only ablation:
 A. face-focused RGB only, no identity adversary
 B. face-focused RGB + learned motion residuals, no identity adversary
 C. face-focused RGB + motion + delayed identity suppression
 
-Actor-disjoint folds are mandatory. This is a development benchmark, not final validation.
+Actor-disjoint folds are mandatory. This runner is for architecture selection only; a
+separate frozen-model held-out privacy audit is required before any final claim.
 """
 from __future__ import annotations
 from pathlib import Path
@@ -52,7 +53,7 @@ class FaceVideoDataset(Dataset):
     def __getitem__(self,idx):
         path,actor,emo,orig=self.records[idx]
         raw=sample_rgb(path,self.frames)
-        crops,det,aligned=self.face.process_sequence(raw)
+        crops,det,ali,valid,reused=self.face.process_sequence(raw)
         x=crops.astype(np.float32)/255.0
         x=(x-IMAGENET_MEAN)/IMAGENET_STD
         if self.augment:
@@ -60,16 +61,22 @@ class FaceVideoDataset(Dataset):
             if rng.random()<.5: x=x[:,:,::-1,:].copy()
         x=torch.from_numpy(x).permute(0,3,1,2)
         ident=-1 if self.actor_to_i is None else self.actor_to_i[actor]
-        return x, torch.tensor(EMO_TO_I[emo]), torch.tensor(ident), int(orig), torch.tensor(det.mean(),dtype=torch.float32), torch.tensor(aligned.mean(),dtype=torch.float32)
+        return (
+            x, torch.tensor(EMO_TO_I[emo]), torch.tensor(ident), int(orig),
+            torch.tensor(det.mean(),dtype=torch.float32),
+            torch.tensor(ali.mean(),dtype=torch.float32),
+            torch.tensor(valid,dtype=torch.bool),
+            torch.tensor(reused.mean(),dtype=torch.float32),
+        )
 
 
 class RGBOnlyWrapper(torch.nn.Module):
     def __init__(self,model): super().__init__(); self.model=model
-    def forward(self,frames,identity_grl_strength=0.0):
+    def forward(self,frames,identity_grl_strength=0.0,mask=None):
         rgb=self.model.encode_rgb(frames)
         motion=torch.zeros(frames.shape[0],frames.shape[1],self.model.config.motion_dim,device=frames.device)
         fused,gate=self.model.fusion(rgb,motion)
-        seq,_=self.model.temporal(fused); pooled,attn=self.model.attn(seq)
+        seq,_=self.model.temporal(fused); pooled,attn=self.model.attn(seq,mask=mask)
         latent=self.model.task_projection(pooled)
         return {'emotion_logits':self.model.emotion_head(latent),'identity_logits':self.model.identity_head(latent),'task_latent':latent,'temporal_attention':attn,'fusion_gate':gate}
 
@@ -80,7 +87,8 @@ def train_fold(train_records,test_records,*,variant,epochs,batch_size,frames,siz
     te=FaceVideoDataset(test_records,None,frames,size,False,seed)
     trl=DataLoader(tr,batch_size=batch_size,shuffle=True,num_workers=0)
     tel=DataLoader(te,batch_size=batch_size,shuffle=False,num_workers=0)
-    cfg=FERV31Config(n_identities=len(actors),pretrained=pretrained,temporal_hidden=192,motion_dim=96,identity_weight=.10,grl_start_fraction=.35,grl_max_strength=.60)
+    cfg=FERV31Config(n_identities=len(actors),pretrained=pretrained,temporal_hidden=192,motion_dim=96,
+                     identity_weight=.10,grl_start_fraction=.35,grl_max_strength=.60)
     core=TAPFMinFERV31(cfg).to(device)
     model=RGBOnlyWrapper(core).to(device) if variant=='rgb' else core
     core.freeze_rgb_backbone()
@@ -94,23 +102,35 @@ def train_fold(train_records,test_records,*,variant,epochs,batch_size,frames,siz
         progress=(epoch+1)/epochs
         grl=0.0 if variant!='motion_grl' else core.scheduled_grl(progress,cfg)
         id_weight=0.0 if variant!='motion_grl' else cfg.identity_weight
-        for x,y,i,_,_,_ in trl:
-            x=x.to(device); y=y.to(device); i=i.to(device)
+        for x,y,i,_,_,_,valid,_ in trl:
+            x=x.to(device); y=y.to(device); i=i.to(device); valid=valid.to(device)
+            # All-invalid sequences contain no trusted face evidence and must not train the model.
+            keep=valid.any(dim=1)
+            if not bool(keep.any()):
+                continue
+            x=x[keep]; y=y[keep]; i=i[keep]; valid=valid[keep]
             opt.zero_grad(set_to_none=True)
-            out=model(x,identity_grl_strength=grl)
+            out=model(x,identity_grl_strength=grl,mask=valid)
             emo=F.cross_entropy(out['emotion_logits'],y,label_smoothing=.05)
             ident=F.cross_entropy(out['identity_logits'],i)
             loss=emo+id_weight*ident
             loss.backward(); torch.nn.utils.clip_grad_norm_(model.parameters(),5.0); opt.step(); losses.append(float(loss.detach().cpu()))
+        if not losses:
+            raise RuntimeError('no valid face sequences available for training fold')
         history.append({'epoch':epoch+1,'loss':float(np.mean(losses)),'grl_strength':float(grl),'identity_weight':float(id_weight)})
-    model.eval(); rows=[]; ids=[]; det=[]; alg=[]
+    model.eval(); rows=[]; ids=[]; det=[]; ali=[]; val=[]; reuse=[]
     with torch.no_grad():
-        for x,_,_,orig,cov,align_cov in tel:
-            x=x.to(device)
-            out=model(x,identity_grl_strength=0.0)
+        for x,_,_,orig,dcov,acov,valid,rcov in tel:
+            x=x.to(device); valid=valid.to(device)
+            out=model(x,identity_grl_strength=0.0,mask=valid)
             p=torch.softmax(out['emotion_logits'],dim=-1).cpu().numpy()
-            rows.append(p); ids.extend(np.asarray(orig).astype(int).tolist()); det.extend(np.asarray(cov).astype(float).tolist()); alg.extend(np.asarray(align_cov).astype(float).tolist())
-    return np.vstack(rows),np.asarray(ids),history,float(np.mean(det)),float(np.mean(alg))
+            rows.append(p); ids.extend(np.asarray(orig).astype(int).tolist())
+            det.extend(np.asarray(dcov).astype(float).tolist()); ali.extend(np.asarray(acov).astype(float).tolist())
+            val.extend(valid.float().mean(dim=1).cpu().numpy().astype(float).tolist()); reuse.extend(np.asarray(rcov).astype(float).tolist())
+    return np.vstack(rows),np.asarray(ids),history,{
+        'face_detection_rate':float(np.mean(det)), 'eye_alignment_rate':float(np.mean(ali)),
+        'valid_face_rate':float(np.mean(val)), 'bbox_reuse_rate':float(np.mean(reuse)),
+    }
 
 
 def run(root,folds=3,epochs=8,batch_size=8,frames=8,size=96,seed=42,pretrained=True):
@@ -124,15 +144,16 @@ def run(root,folds=3,epochs=8,batch_size=8,frames=8,size=96,seed=42,pretrained=T
     device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     results={}
     for variant in ['rgb','motion','motion_grl']:
-        P=np.zeros((len(records),6),np.float32); fold_rows=[]; det_cov=[]; align_cov=[]
+        P=np.zeros((len(records),6),np.float32); fold_rows=[]; quality=[]
         splitter=GroupKFold(n_splits=min(folds,len(np.unique(actor))))
         for f,(tr,te) in enumerate(splitter.split(np.arange(len(records)),emotion,groups=actor),1):
-            Pf,ids,h,cov,acov=train_fold([records[i] for i in tr],[records[i] for i in te],variant=variant,epochs=epochs,batch_size=batch_size,frames=frames,size=size,seed=seed+f*101,device=device,pretrained=pretrained)
-            P[ids]=Pf; pred=EMOTIONS[np.argmax(Pf,axis=1)]; det_cov.append(cov); align_cov.append(acov)
-            fold_rows.append({'fold':f,'accuracy':float(accuracy_score(emotion[te],pred)),'macro_f1':float(f1_score(emotion[te],pred,average='macro',zero_division=0)),'actor_overlap':int(len(set(actor[tr])&set(actor[te]))),'face_detection_rate':cov,'eye_alignment_rate':acov,'history':h})
+            Pf,ids,h,q=train_fold([records[i] for i in tr],[records[i] for i in te],variant=variant,epochs=epochs,batch_size=batch_size,frames=frames,size=size,seed=seed+f*101,device=device,pretrained=pretrained)
+            P[ids]=Pf; pred=EMOTIONS[np.argmax(Pf,axis=1)]; quality.append(q)
+            fold_rows.append({'fold':f,'accuracy':float(accuracy_score(emotion[te],pred)),'macro_f1':float(f1_score(emotion[te],pred,average='macro',zero_division=0)),'actor_overlap':int(len(set(actor[tr])&set(actor[te]))),'preprocessing_quality':q,'history':h})
         pred=EMOTIONS[np.argmax(P,axis=1)]
-        results[variant]={'accuracy':float(accuracy_score(emotion,pred)),'macro_f1':float(f1_score(emotion,pred,average='macro',zero_division=0)),'face_detection_rate_mean':float(np.mean(det_cov)),'eye_alignment_rate_mean':float(np.mean(align_cov)),'folds':fold_rows}
-    out={'dataset':'CREMA-D DFA cohort supplied to runner','scope':'development ablation; not final validation','variants':results,'parameters':{'folds':folds,'epochs':epochs,'batch_size':batch_size,'frames':frames,'size':size,'seed':seed,'pretrained':pretrained}}
+        qmean={k:float(np.mean([q[k] for q in quality])) for k in quality[0]}
+        results[variant]={'accuracy':float(accuracy_score(emotion,pred)),'macro_f1':float(f1_score(emotion,pred,average='macro',zero_division=0)),'preprocessing_quality_mean':qmean,'folds':fold_rows}
+    out={'dataset':'CREMA-D DFA cohort supplied to runner','scope':'development architecture selection only; not final validation','variants':results,'selection_warning':'Do not report the selected variant OOF score as final evidence. Freeze the architecture, then use a separate held-out actor cohort and one frozen model for final utility/privacy audit.','parameters':{'folds':folds,'epochs':epochs,'batch_size':batch_size,'frames':frames,'size':size,'seed':seed,'pretrained':pretrained}}
     Path('results').mkdir(exist_ok=True); Path('results/cremad_v31_motion_fer.json').write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2)); return out
 
 if __name__=='__main__':
