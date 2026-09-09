@@ -1,0 +1,24 @@
+{
+  "schema": "tapf-min-final-protocol/v1",
+  "status": "PREDECLARED_NOT_EXECUTED",
+  "scope": "Controlled CREMA-D research validation; not clinical validation or anonymity proof.",
+  "privacy_unit": "one held-out person's task input within a declared accounting window",
+  "utility": {"primary_metric": "macro_f1", "resampling": "actor_cluster_bootstrap", "min_lower_ci": 0.70},
+  "empirical_privacy": {
+    "fixed_model_required": true,
+    "fer_train_audit_actor_overlap": 0,
+    "clip_identity_max_effective_auc": 0.55,
+    "repeated_release_max_effective_auc": 0.55,
+    "attackers": ["logistic", "rbf_svm", "random_forest", "mlp"],
+    "required_extensions": ["linkage", "open_set_or_verification"]
+  },
+  "formal_privacy": {
+    "release_objects": ["randomized_response_label", "gaussian_quantized_posterior"],
+    "accounting": "persistent_basic_sequential_composition",
+    "report_epsilon_delta": true,
+    "fail_closed_on_budget_exhaustion": true
+  },
+  "minimum_disclosure": {"prefer_smallest_eligible_payload": true, "raw_video_release": false, "latent_release": false},
+  "integrity": {"bind_model_hash": true, "bind_protocol_hash": true, "bind_evidence_hash": true, "replay_protection": true},
+  "freeze_rule": "Thresholds and primary endpoints must not be changed after final evaluation begins; changes require a new protocol version and must be reported as exploratory."
+}
