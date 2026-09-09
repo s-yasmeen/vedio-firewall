@@ -52,7 +52,7 @@ class FaceVideoDataset(Dataset):
     def __getitem__(self,idx):
         path,actor,emo,orig=self.records[idx]
         raw=sample_rgb(path,self.frames)
-        crops,det=self.face.process_sequence(raw)
+        crops,det,aligned=self.face.process_sequence(raw)
         x=crops.astype(np.float32)/255.0
         x=(x-IMAGENET_MEAN)/IMAGENET_STD
         if self.augment:
@@ -60,11 +60,10 @@ class FaceVideoDataset(Dataset):
             if rng.random()<.5: x=x[:,:,::-1,:].copy()
         x=torch.from_numpy(x).permute(0,3,1,2)
         ident=-1 if self.actor_to_i is None else self.actor_to_i[actor]
-        return x, torch.tensor(EMO_TO_I[emo]), torch.tensor(ident), int(orig), torch.tensor(det.mean(),dtype=torch.float32)
+        return x, torch.tensor(EMO_TO_I[emo]), torch.tensor(ident), int(orig), torch.tensor(det.mean(),dtype=torch.float32), torch.tensor(aligned.mean(),dtype=torch.float32)
 
 
 class RGBOnlyWrapper(torch.nn.Module):
-    """Uses v3.1 backbone but zeros the motion branch for a controlled ablation."""
     def __init__(self,model): super().__init__(); self.model=model
     def forward(self,frames,identity_grl_strength=0.0):
         rgb=self.model.encode_rgb(frames)
@@ -81,8 +80,7 @@ def train_fold(train_records,test_records,*,variant,epochs,batch_size,frames,siz
     te=FaceVideoDataset(test_records,None,frames,size,False,seed)
     trl=DataLoader(tr,batch_size=batch_size,shuffle=True,num_workers=0)
     tel=DataLoader(te,batch_size=batch_size,shuffle=False,num_workers=0)
-    cfg=FERV31Config(n_identities=len(actors),pretrained=pretrained,temporal_hidden=192,motion_dim=96,
-                     identity_weight=.10,grl_start_fraction=.35,grl_max_strength=.60)
+    cfg=FERV31Config(n_identities=len(actors),pretrained=pretrained,temporal_hidden=192,motion_dim=96,identity_weight=.10,grl_start_fraction=.35,grl_max_strength=.60)
     core=TAPFMinFERV31(cfg).to(device)
     model=RGBOnlyWrapper(core).to(device) if variant=='rgb' else core
     core.freeze_rgb_backbone()
@@ -96,7 +94,7 @@ def train_fold(train_records,test_records,*,variant,epochs,batch_size,frames,siz
         progress=(epoch+1)/epochs
         grl=0.0 if variant!='motion_grl' else core.scheduled_grl(progress,cfg)
         id_weight=0.0 if variant!='motion_grl' else cfg.identity_weight
-        for x,y,i,_,_ in trl:
+        for x,y,i,_,_,_ in trl:
             x=x.to(device); y=y.to(device); i=i.to(device)
             opt.zero_grad(set_to_none=True)
             out=model(x,identity_grl_strength=grl)
@@ -105,14 +103,14 @@ def train_fold(train_records,test_records,*,variant,epochs,batch_size,frames,siz
             loss=emo+id_weight*ident
             loss.backward(); torch.nn.utils.clip_grad_norm_(model.parameters(),5.0); opt.step(); losses.append(float(loss.detach().cpu()))
         history.append({'epoch':epoch+1,'loss':float(np.mean(losses)),'grl_strength':float(grl),'identity_weight':float(id_weight)})
-    model.eval(); rows=[]; ids=[]; det=[]
+    model.eval(); rows=[]; ids=[]; det=[]; alg=[]
     with torch.no_grad():
-        for x,_,_,orig,cov in tel:
+        for x,_,_,orig,cov,align_cov in tel:
             x=x.to(device)
             out=model(x,identity_grl_strength=0.0)
             p=torch.softmax(out['emotion_logits'],dim=-1).cpu().numpy()
-            rows.append(p); ids.extend(np.asarray(orig).astype(int).tolist()); det.extend(np.asarray(cov).astype(float).tolist())
-    return np.vstack(rows),np.asarray(ids),history,float(np.mean(det))
+            rows.append(p); ids.extend(np.asarray(orig).astype(int).tolist()); det.extend(np.asarray(cov).astype(float).tolist()); alg.extend(np.asarray(align_cov).astype(float).tolist())
+    return np.vstack(rows),np.asarray(ids),history,float(np.mean(det)),float(np.mean(alg))
 
 
 def run(root,folds=3,epochs=8,batch_size=8,frames=8,size=96,seed=42,pretrained=True):
@@ -126,14 +124,14 @@ def run(root,folds=3,epochs=8,batch_size=8,frames=8,size=96,seed=42,pretrained=T
     device=torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     results={}
     for variant in ['rgb','motion','motion_grl']:
-        P=np.zeros((len(records),6),np.float32); fold_rows=[]; det_cov=[]
+        P=np.zeros((len(records),6),np.float32); fold_rows=[]; det_cov=[]; align_cov=[]
         splitter=GroupKFold(n_splits=min(folds,len(np.unique(actor))))
         for f,(tr,te) in enumerate(splitter.split(np.arange(len(records)),emotion,groups=actor),1):
-            Pf,ids,h,cov=train_fold([records[i] for i in tr],[records[i] for i in te],variant=variant,epochs=epochs,batch_size=batch_size,frames=frames,size=size,seed=seed+f*101,device=device,pretrained=pretrained)
-            P[ids]=Pf; pred=EMOTIONS[np.argmax(Pf,axis=1)]; det_cov.append(cov)
-            fold_rows.append({'fold':f,'accuracy':float(accuracy_score(emotion[te],pred)),'macro_f1':float(f1_score(emotion[te],pred,average='macro',zero_division=0)),'actor_overlap':int(len(set(actor[tr])&set(actor[te]))),'face_detection_rate':cov,'history':h})
+            Pf,ids,h,cov,acov=train_fold([records[i] for i in tr],[records[i] for i in te],variant=variant,epochs=epochs,batch_size=batch_size,frames=frames,size=size,seed=seed+f*101,device=device,pretrained=pretrained)
+            P[ids]=Pf; pred=EMOTIONS[np.argmax(Pf,axis=1)]; det_cov.append(cov); align_cov.append(acov)
+            fold_rows.append({'fold':f,'accuracy':float(accuracy_score(emotion[te],pred)),'macro_f1':float(f1_score(emotion[te],pred,average='macro',zero_division=0)),'actor_overlap':int(len(set(actor[tr])&set(actor[te]))),'face_detection_rate':cov,'eye_alignment_rate':acov,'history':h})
         pred=EMOTIONS[np.argmax(P,axis=1)]
-        results[variant]={'accuracy':float(accuracy_score(emotion,pred)),'macro_f1':float(f1_score(emotion,pred,average='macro',zero_division=0)),'face_detection_rate_mean':float(np.mean(det_cov)),'folds':fold_rows}
+        results[variant]={'accuracy':float(accuracy_score(emotion,pred)),'macro_f1':float(f1_score(emotion,pred,average='macro',zero_division=0)),'face_detection_rate_mean':float(np.mean(det_cov)),'eye_alignment_rate_mean':float(np.mean(align_cov)),'folds':fold_rows}
     out={'dataset':'CREMA-D DFA cohort supplied to runner','scope':'development ablation; not final validation','variants':results,'parameters':{'folds':folds,'epochs':epochs,'batch_size':batch_size,'frames':frames,'size':size,'seed':seed,'pretrained':pretrained}}
     Path('results').mkdir(exist_ok=True); Path('results/cremad_v31_motion_fer.json').write_text(json.dumps(out,indent=2)); print(json.dumps(out,indent=2)); return out
 
