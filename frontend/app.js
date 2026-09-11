@@ -22,7 +22,7 @@ async function refreshHealth(){
   try{
     const h=await fetchJSON('/healthz');
     $('#serviceState').textContent=h.status==='ok'?'ONLINE':'DEGRADED';
-    badge.textContent=h.status==='ok'?'Service online':'Service degraded'; badge.className='badge '+(h.status==='ok'?'ok':'warn');
+    badge.textContent=h.v22_chance_centered_gate?'v2.2 gate online':'Service online'; badge.className='badge '+(h.status==='ok'?'ok':'warn');
     try{await fetchJSON('/readyz');$('#readyState').textContent='READY'}catch{$('#readyState').textContent='NOT READY'}
   }catch(e){
     $('#serviceState').textContent='OFFLINE';$('#readyState').textContent='—';badge.textContent='Service offline';badge.className='badge danger';
@@ -38,9 +38,7 @@ async function startLocalCamera(){
     state.cameraStream=stream; video.srcObject=stream; video.classList.add('active'); placeholder.classList.add('hidden');
     $('#startCamera').disabled=true; $('#stopCamera').disabled=false;
     msg.textContent='Camera active locally. No camera frame is uploaded by this interface.';
-  }catch(e){
-    msg.textContent='Camera permission was not granted or the camera is unavailable.';
-  }
+  }catch(e){msg.textContent='Camera permission was not granted or the camera is unavailable.';}
 }
 function stopLocalCamera(){
   if(state.cameraStream){state.cameraStream.getTracks().forEach(t=>t.stop());state.cameraStream=null;}
@@ -52,24 +50,56 @@ $('#startCamera').addEventListener('click',startLocalCamera);
 $('#stopCamera').addEventListener('click',stopLocalCamera);
 window.addEventListener('pagehide',stopLocalCamera);
 
-const fallbackReps={expression:['action_units','expression_embedding'],movement:['landmark_trajectories','motion_embedding'],rppg:['physiological_signal'],authentication:['cancelable_template'],visual_exam:['protected_video']};
+const fallbackReps={
+  emotion:['action-units','expression-embedding','protected-video'],
+  movement:['landmark-trajectories','motion-features','protected-video'],
+  'neurology-motion':['landmark-trajectories','motion-features','protected-video'],
+  rppg:['physiological-signal','protected-video'],
+  authentication:['cancelable-template'],
+  'clinician-visual':['protected-video']
+};
 async function loadRepresentations(){
   const task=$('#task').value, select=$('#representation'); let reps=fallbackReps[task]||[];
   try{const d=await fetchJSON(`/v1/tasks/${encodeURIComponent(task)}/representations`);if(Array.isArray(d.allowed_representations)&&d.allowed_representations.length)reps=d.allowed_representations}catch{}
-  select.innerHTML=''; reps.forEach(rep=>{const o=document.createElement('option');o.value=rep;o.textContent=rep.replaceAll('_',' ');select.appendChild(o)});
+  select.innerHTML=''; reps.forEach(rep=>{const o=document.createElement('option');o.value=rep;o.textContent=rep.replaceAll('-',' ');select.appendChild(o)});
 }
 $('#task').addEventListener('change',loadRepresentations);
 
 function n(id){return Number($(id).value)}
 function isoNow(){return new Date().toISOString()}
-function requestPayload(){return {task:$('#task').value,representation:$('#representation').value,measured_at:isoNow(),max_evidence_age_seconds:300,privacy_upper_threshold:n('#privacyThreshold'),utility_lower_threshold:n('#utilityThreshold'),temporal_upper_threshold:n('#temporalThreshold'),latency_ms_threshold:n('#latencyThreshold'),operating_points:[{alpha:n('#alpha'),identity_risk:n('#identityRisk'),identity_risk_upper:n('#identityUpper'),task_utility:n('#taskUtility'),task_utility_lower:n('#utilityLower'),temporal_risk:n('#temporalRisk'),temporal_risk_upper:n('#temporalUpper'),latency_ms:n('#latency'),evaluator_id:$('#evaluatorId').value.trim()||'edge-evaluator-v1',sample_count:Math.max(1,Math.floor(n('#sampleCount')||1))}]};}
+function attackerAucs(){return $('#attackerAucs').value.split(',').map(x=>Number(x.trim())).filter(x=>Number.isFinite(x));}
+function requestPayload(){
+  return {
+    task:$('#task').value,
+    representation:$('#representation').value,
+    measured_at:isoNow(),
+    max_evidence_age_seconds:300,
+    max_identity_advantage:n('#identityAdvantageThreshold'),
+    min_task_f1_lower_ci:n('#utilityThreshold'),
+    latency_ms_threshold:n('#latencyThreshold'),
+    operating_points:[{
+      alpha:n('#alpha'),
+      clip_auc_ci95_low:n('#clipAucLow'),
+      clip_auc_ci95_high:n('#clipAucHigh'),
+      repeated_release_auc:n('#repeatedAuc'),
+      task_f1_ci95_low:n('#taskF1Low'),
+      task_f1_ci95_high:n('#taskF1High'),
+      attacker_aucs:attackerAucs(),
+      latency_ms:n('#latency'),
+      evaluator_id:$('#evaluatorId').value.trim()||'v22-identity-ensemble',
+      sample_count:Math.max(1,Math.floor(n('#sampleCount')||1))
+    }]
+  };
+}
 function validatePayload(p){
-  const vals=[p.privacy_upper_threshold,p.utility_lower_threshold,p.temporal_upper_threshold,...Object.values(p.operating_points[0]).filter(v=>typeof v==='number')];
-  if(vals.some(v=>!Number.isFinite(v)))return 'All numeric fields must contain valid numbers.';
+  const o=p.operating_points[0];
+  const vals=[p.max_identity_advantage,p.min_task_f1_lower_ci,p.latency_ms_threshold,o.alpha,o.clip_auc_ci95_low,o.clip_auc_ci95_high,o.repeated_release_auc,o.task_f1_ci95_low,o.task_f1_ci95_high,o.latency_ms,...o.attacker_aucs];
+  if(vals.some(v=>!Number.isFinite(v)))return 'All numeric evidence must contain valid numbers.';
   if(!p.representation)return 'Select an authorized representation.';
-  if(p.operating_points[0].identity_risk_upper<p.operating_points[0].identity_risk)return 'Identity upper bound cannot be below point estimate.';
-  if(p.operating_points[0].task_utility_lower>p.operating_points[0].task_utility)return 'Utility lower bound cannot exceed point estimate.';
-  if(p.operating_points[0].temporal_risk_upper<p.operating_points[0].temporal_risk)return 'Temporal upper bound cannot be below point estimate.';
+  if(o.clip_auc_ci95_low>o.clip_auc_ci95_high)return 'Clip AUC CI low cannot exceed CI high.';
+  if(o.task_f1_ci95_low>o.task_f1_ci95_high)return 'Task F1 CI low cannot exceed CI high.';
+  if(!o.attacker_aucs.length)return 'Provide at least one independent attacker AUC.';
+  if(o.attacker_aucs.some(v=>v<0||v>1))return 'Attacker AUCs must be in [0,1].';
   return '';
 }
 function shortHash(s){return s&&s.length>22?s.slice(0,10)+'…'+s.slice(-8):s||'—'}
@@ -77,7 +107,7 @@ function renderDecision(d){
   const release=String(d.decision||d.release_decision||'').toUpperCase()==='RELEASE';
   $('#decisionIcon').textContent=release?'✓':'×';$('#decisionIcon').className='decision-icon '+(release?'ok':'danger');
   $('#decisionTitle').textContent=release?'Release authorized':'Release blocked';
-  $('#decisionReason').textContent=d.reason||(release?'All configured evidence bounds passed.':'One or more release conditions failed.');
+  $('#decisionReason').textContent=d.reason||(release?'All v2.2 privacy, utility and latency bounds passed.':'One or more v2.2 release conditions failed.');
   $('#selectedAlpha').textContent=d.selected_alpha??'—';$('#selectedRep').textContent=d.representation||'—';$('#evidenceHash').textContent=shortHash(d.evidence_sha256);$('#requestId').textContent=d.request_id||'—';$('#riskRingValue').textContent=release?'PASS':'BLOCK';
 }
 function addHistory(d){const att=d.attestation||{};state.history.unshift({decision:d.decision||att.release_decision||'BLOCK',task:d.task||att.task||'—',representation:d.representation||att.representation||'—',request_id:d.request_id||att.request_id||'—',time:att.timestamp_utc||isoNow()});state.history=state.history.slice(0,12);renderHistory();}
@@ -85,8 +115,16 @@ function renderHistory(){const root=$('#attestationList');root.innerHTML='';if(!
 function escapeHTML(s){return String(s).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 $('#clearHistory').addEventListener('click',()=>{state.history=[];renderHistory()});
 
-$('#releaseForm').addEventListener('submit',async e=>{e.preventDefault();const msg=$('#formMessage');const p=requestPayload(),err=validatePayload(p);if(err){msg.textContent=err;return}msg.textContent='Evaluating measured evidence…';const key=$('#apiKey').value.trim();try{const d=await fetchJSON('/v2/release/evaluate',{method:'POST',headers:key?{Authorization:`Bearer ${key}`}:{},body:JSON.stringify(p)});renderDecision(d);addHistory(d);msg.textContent='Evaluation complete.'}catch(ex){renderDecision({decision:'BLOCK',reason:`Service rejected request: ${ex.message}`,representation:p.representation});msg.textContent='Fail-closed: request was not released.'}});
-$('#loadBlocked').addEventListener('click',()=>{$('#identityRisk').value='0.88';$('#identityUpper').value='0.94';$('#taskUtility').value='0.82';$('#utilityLower').value='0.76';$('#temporalRisk').value='0.73';$('#temporalUpper').value='0.86';$('#latency').value='95';$('#formMessage').textContent='Loaded a high identity-leakage example. Run the gate to confirm BLOCK.';});
+$('#releaseForm').addEventListener('submit',async e=>{
+  e.preventDefault();const msg=$('#formMessage');const p=requestPayload(),err=validatePayload(p);if(err){msg.textContent=err;return}
+  msg.textContent='Running chance-centered v2.2 privacy–utility gate…';const key=$('#apiKey').value.trim();
+  try{const d=await fetchJSON('/v22/release/evaluate',{method:'POST',headers:key?{Authorization:`Bearer ${key}`}:{},body:JSON.stringify(p)});renderDecision(d);addHistory(d);msg.textContent='v2.2 evaluation complete.'}
+  catch(ex){renderDecision({decision:'BLOCK',reason:`Service rejected request: ${ex.message}`,representation:p.representation});msg.textContent='Fail-closed: request was not released.'}
+});
+$('#loadBlocked').addEventListener('click',()=>{
+  $('#clipAucLow').value='0.61';$('#clipAucHigh').value='0.69';$('#repeatedAuc').value='0.72';$('#taskF1Low').value='0.24';$('#taskF1High').value='0.32';$('#attackerAucs').value='0.63,0.67,0.59,0.71';$('#latency').value='80';
+  $('#formMessage').textContent='Loaded an identity-leakage example. Run the v2.2 gate to confirm BLOCK.';
+});
 
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();state.installPrompt=e;$('#installBtn').classList.remove('hidden')});
 $('#installBtn').addEventListener('click',async()=>{if(!state.installPrompt)return;state.installPrompt.prompt();await state.installPrompt.userChoice;state.installPrompt=null;$('#installBtn').classList.add('hidden')});
