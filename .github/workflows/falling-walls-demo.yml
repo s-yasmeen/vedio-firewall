@@ -24,15 +24,25 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r demo/requirements-falling-walls.txt
-      - name: Compile demo
-        run: python -m py_compile demo/falling_walls_demo.py demo/standalone_launcher.py tapf/formal_privacy.py
-      - name: Import demo and verify frozen evidence
+      - name: Compile demo sources
+        run: python -m py_compile demo/falling_walls_demo.py demo/standalone_web_demo.py tapf/formal_privacy.py
+      - name: Verify frozen evidence and standalone release logic
         run: |
           python - <<'PY'
-          import demo.falling_walls_demo as d
-          assert d.FROZEN_RESULTS['TAPF-MIN v2.1 frozen validation']['release_decision'] == 'BLOCK'
-          assert d._rr_expected_accuracy(1.0, 6) > 0.0
-          print('Falling Walls demo smoke test passed')
+          import demo.falling_walls_demo as ui
+          import demo.standalone_web_demo as app
+          assert ui.FROZEN_RESULTS['TAPF-MIN v2.1 frozen validation']['release_decision'] == 'BLOCK'
+          assert app.FROZEN_RESULTS['TAPF-MIN v2.1 frozen validation']['release_decision'] == 'BLOCK'
+          app.reset_demo()
+          req = {'posterior':[0.06,0.05,0.04,0.61,0.17,0.07], 'epsilon':1.0, 'budget':1.0}
+          r1 = app.release_demo(req)
+          r2 = app.release_demo(req)
+          assert r1['decision'] == 'RELEASE'
+          assert r1['payload']['payload_bits'] == 3
+          assert r1['payload']['raw_video_released'] is False
+          assert r1['payload']['task_latent_released'] is False
+          assert r2['decision'] == 'BLOCK'
+          print('Source smoke and privacy release tests passed')
           PY
 
   build-windows-exe:
@@ -49,7 +59,7 @@ jobs:
         shell: pwsh
         run: |
           python -m pip install --upgrade pip
-          pip install -r demo/requirements-falling-walls.txt
+          pip install -r demo/requirements-standalone.txt
           pip install pyinstaller==6.15.0
       - name: Build standalone executable
         shell: pwsh
@@ -61,7 +71,7 @@ jobs:
             throw 'Standalone executable was not created.'
           }
           Get-Item 'dist/TAPF-MIN-Falling-Walls.exe' | Format-List Name,Length,LastWriteTime
-      - name: Launch-test executable
+      - name: Launch-test executable and privacy behavior
         shell: pwsh
         run: |
           $env:TAPF_DEMO_PORT = '8765'
@@ -75,17 +85,31 @@ jobs:
                 throw "Executable exited before serving the demo. Exit code: $($proc.ExitCode)"
               }
               try {
-                $r = Invoke-WebRequest -UseBasicParsing 'http://127.0.0.1:8765' -TimeoutSec 2
-                if ($r.StatusCode -eq 200) {
+                $r = Invoke-RestMethod 'http://127.0.0.1:8765/healthz' -TimeoutSec 2
+                if ($r.status -eq 'ok') {
                   $ok = $true
                   break
                 }
               } catch { }
             }
             if (-not $ok) {
-              throw 'Executable did not serve the Falling Walls interface on localhost.'
+              throw 'Executable did not pass the localhost health check.'
             }
-            Write-Host 'Standalone executable launch test passed.'
+
+            $body = @{
+              posterior = @(0.06,0.05,0.04,0.61,0.17,0.07)
+              epsilon = 1.0
+              budget = 1.0
+            } | ConvertTo-Json
+            $release = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8765/api/release' -ContentType 'application/json' -Body $body
+            if ($release.decision -ne 'RELEASE') { throw 'First release did not RELEASE.' }
+            if ($release.payload.payload_bits -ne 3) { throw 'Unexpected payload size.' }
+            if ($release.payload.raw_video_released -ne $false) { throw 'Raw video release invariant failed.' }
+            if ($release.payload.task_latent_released -ne $false) { throw 'Task latent release invariant failed.' }
+
+            $blocked = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8765/api/release' -ContentType 'application/json' -Body $body
+            if ($blocked.decision -ne 'BLOCK') { throw 'Budget exhaustion did not fail closed.' }
+            Write-Host 'Standalone executable launch, RELEASE, and BLOCK tests passed.'
           }
           finally {
             if (-not $proc.HasExited) {
