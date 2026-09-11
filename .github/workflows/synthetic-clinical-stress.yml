@@ -32,3 +32,5 @@ jobs:
         with:
           name: synthetic-clinical-stress-v22
           path: results/synthetic_clinical_stress_v22.json
+
+# Reproducibility trigger: synthetic stress evidence is generated from a fixed seed and frozen v2.2 gate.
