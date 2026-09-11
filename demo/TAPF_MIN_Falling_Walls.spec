@@ -2,8 +2,8 @@
 from pathlib import Path
 from PyInstaller.utils.hooks import collect_all
 
-SPEC_DIR = Path(__file__).resolve().parent
-REPO_ROOT = SPEC_DIR.parent
+REPO_ROOT = Path.cwd().resolve()
+SPEC_DIR = REPO_ROOT / 'demo'
 
 streamlit_datas, streamlit_binaries, streamlit_hidden = collect_all('streamlit')
 np_datas, np_binaries, np_hidden = collect_all('numpy')
