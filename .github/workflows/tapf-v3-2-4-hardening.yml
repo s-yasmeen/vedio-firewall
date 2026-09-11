@@ -1,0 +1,21 @@
+name: TAPF-MIN v3.2-v3.4 hardening
+on:
+  push:
+    branches: [tapf-min-v3-2-4-hardening]
+    paths: ['tapf/**','tests/**','experiments/evaluate_v3_final_gate.py','protocols/**','.github/workflows/tapf-v3-2-4-hardening.yml']
+  workflow_dispatch:
+jobs:
+  hardening:
+    runs-on: ubuntu-latest
+    env: {PYTHONPATH: '${{ github.workspace }}'}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.11'}
+      - run: pip install numpy scikit-learn pytest
+      - name: Compile hardening modules
+        run: python -m py_compile tapf/evidence_registry.py tapf/release_authority.py tapf/persistent_privacy.py tapf/privacy_attacks.py experiments/evaluate_v3_final_gate.py
+      - name: Test release security and attacks
+        run: pytest -q tests/test_persistent_privacy.py tests/test_release_authority.py tests/test_privacy_attacks.py
+      - name: Validate frozen protocol JSON
+        run: python -m json.tool protocols/tapf_min_v3_final_protocol.json >/dev/null

@@ -1,0 +1,36 @@
+name: TAPF-MIN v3.1 FER repair
+
+on:
+  push:
+    branches: [tapf-min-v3-2-4-hardening]
+    paths:
+      - 'tapf/fer_v31.py'
+      - 'tapf/face_preprocess.py'
+      - 'tapf/prevalidation_gate.py'
+      - 'tests/test_fer_v31.py'
+      - 'tests/test_face_preprocess.py'
+      - 'tests/test_prevalidation_gate.py'
+      - 'experiments/run_cremad_v31_motion_fer.py'
+      - '.github/workflows/tapf-v31-fer-repair.yml'
+  workflow_dispatch:
+
+jobs:
+  fer-v31-unit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy pytest opencv-python-headless==4.10.0.84
+          pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+      - name: Compile modules
+        run: python -m py_compile tapf/fer_v31.py tapf/face_preprocess.py tapf/prevalidation_gate.py experiments/run_cremad_v31_motion_fer.py
+      - name: Run FER v3.1 tests
+        run: pytest -q tests/test_fer_v31.py tests/test_face_preprocess.py tests/test_prevalidation_gate.py
