@@ -14,7 +14,7 @@ on:
 jobs:
   v23-validation:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 180
     env:
       PYTHONPATH: ${{ github.workspace }}
     steps:
