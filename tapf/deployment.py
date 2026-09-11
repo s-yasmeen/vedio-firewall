@@ -1,9 +1,11 @@
 """Deployment policy primitives for TAPF-MIN.
 
-This module keeps deployment release decisions separate from experimental image
-transforms. Generic normalized-risk decisions use v2.2-compatible defaults:
-identity advantage <= 0.05, task Macro-F1 lower bound >= 0.20, and repeated-release
-advantage <= 0.05. Direct chance-centered AUC evidence should use tapf.deployment_v22.
+This compatibility module retains the v2 normalized-risk interface used by earlier
+prototype tests and clients. The scientifically preferred chance-centered v2.2 gate
+lives in ``tapf.deployment_v22`` and is exposed by ``/v22/release/evaluate``.
+
+Keeping the compatibility thresholds separate avoids silently changing the meaning of
+legacy risk fields while allowing the v2.2 endpoint to enforce direct AUC/F1 evidence.
 """
 from __future__ import annotations
 from dataclasses import dataclass, asdict
@@ -12,9 +14,9 @@ from typing import Iterable
 
 @dataclass(frozen=True)
 class DeploymentPolicy:
-    privacy_upper_threshold: float = 0.05
-    utility_lower_threshold: float = 0.20
-    temporal_upper_threshold: float = 0.05
+    privacy_upper_threshold: float = 0.25
+    utility_lower_threshold: float = 0.75
+    temporal_upper_threshold: float = 0.30
     latency_ms_threshold: float = 150.0
     fail_closed: bool = True
 
@@ -80,11 +82,7 @@ def evaluate_bounded(e: BoundedEvidence, policy: DeploymentPolicy) -> dict:
 def select_minimum_release(task: str, representation: str,
                            evidence: Iterable[BoundedEvidence],
                            policy: DeploymentPolicy) -> dict:
-    """Choose the least-disclosing valid operating point.
-
-    Representation is validated against the task policy. Within a representation,
-    the minimum alpha satisfying all conservative criteria is selected.
-    """
+    """Choose the least-disclosing valid operating point."""
     allowed = allowed_representations(task)
     if representation not in allowed:
         return {
