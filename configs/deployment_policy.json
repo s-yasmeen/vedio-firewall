@@ -1,21 +1,27 @@
 {
-  "schema": "tapf-min-deployment-policy/v1",
-  "policy_version": "2026-09-07.1",
+  "schema": "tapf-min-deployment-policy/v2.2",
+  "policy_version": "2026-09-11.1",
   "fail_closed": true,
-  "privacy_upper_threshold": 0.25,
-  "utility_lower_threshold": 0.75,
-  "temporal_upper_threshold": 0.30,
+  "chance_identity_auc": 0.50,
+  "max_identity_advantage": 0.05,
+  "max_effective_auc": 0.55,
+  "min_task_f1_lower_ci": 0.20,
   "latency_ms_threshold": 150.0,
   "max_evidence_age_seconds": 300,
-  "release_api": "v2",
+  "release_api": "v2.2-library",
   "raw_biometric_ingestion": false,
+  "repeated_release_evidence_required": true,
+  "all_independent_attackers_must_pass": true,
   "required_controls": [
     "authenticated_release_request",
-    "confidence_bounded_evidence",
+    "chance_centered_identity_auc",
+    "confidence_bounded_clip_privacy",
+    "repeated_release_attack",
     "worst_case_attacker_ensemble",
     "task_authorized_representation",
+    "lower_confidence_bound_task_utility",
     "signed_attestation",
     "strict_fail_closed_localization"
   ],
-  "notes": "Thresholds are research defaults and require task-specific calibration before clinical deployment."
+  "notes": "Research/competition deployment defaults. Passing this empirical gate is not formal anonymity, clinical validation, diagnostic safety, or regulatory compliance. Real clinical deployment requires task-specific calibration and clinical validation."
 }
