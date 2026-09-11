@@ -1,8 +1,9 @@
 """Deployment policy primitives for TAPF-MIN.
 
 This module keeps deployment release decisions separate from experimental image
-transforms. Production decisions use conservative confidence bounds, latency,
-and a task-conditioned representation policy.
+transforms. Generic normalized-risk decisions use v2.2-compatible defaults:
+identity advantage <= 0.05, task Macro-F1 lower bound >= 0.20, and repeated-release
+advantage <= 0.05. Direct chance-centered AUC evidence should use tapf.deployment_v22.
 """
 from __future__ import annotations
 from dataclasses import dataclass, asdict
@@ -11,9 +12,9 @@ from typing import Iterable
 
 @dataclass(frozen=True)
 class DeploymentPolicy:
-    privacy_upper_threshold: float = 0.25
-    utility_lower_threshold: float = 0.75
-    temporal_upper_threshold: float = 0.30
+    privacy_upper_threshold: float = 0.05
+    utility_lower_threshold: float = 0.20
+    temporal_upper_threshold: float = 0.05
     latency_ms_threshold: float = 150.0
     fail_closed: bool = True
 
@@ -55,12 +56,22 @@ def representation_rank(task: str, representation: str) -> int:
         return 10_000
 
 
+def _finite01(value: float) -> bool:
+    v = float(value)
+    return v == v and 0.0 <= v <= 1.0
+
+
 def evaluate_bounded(e: BoundedEvidence, policy: DeploymentPolicy) -> dict:
+    valid_numeric = all(_finite01(v) for v in (
+        e.identity_risk, e.identity_risk_upper, e.task_utility, e.task_utility_lower,
+        e.temporal_risk, e.temporal_risk_upper,
+    )) and float(e.latency_ms) == float(e.latency_ms) and e.latency_ms >= 0.0
     checks = {
-        "privacy_pass": e.identity_risk_upper <= policy.privacy_upper_threshold,
-        "utility_pass": e.task_utility_lower >= policy.utility_lower_threshold,
-        "temporal_pass": e.temporal_risk_upper <= policy.temporal_upper_threshold,
-        "latency_pass": e.latency_ms <= policy.latency_ms_threshold,
+        "numeric_evidence_valid": valid_numeric,
+        "privacy_pass": valid_numeric and e.identity_risk_upper <= policy.privacy_upper_threshold,
+        "utility_pass": valid_numeric and e.task_utility_lower >= policy.utility_lower_threshold,
+        "temporal_pass": valid_numeric and e.temporal_risk_upper <= policy.temporal_upper_threshold,
+        "latency_pass": valid_numeric and e.latency_ms <= policy.latency_ms_threshold,
         "evidence_complete": e.sample_count > 0 and bool(e.evaluator_id),
     }
     return {**asdict(e), **checks, "release": all(checks.values())}
