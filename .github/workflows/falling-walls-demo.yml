@@ -1,0 +1,36 @@
+name: Falling Walls executable demo
+
+on:
+  push:
+    branches: [tapf-min-v3-2-4-hardening]
+    paths:
+      - 'demo/**'
+      - 'tapf/formal_privacy.py'
+      - '.github/workflows/falling-walls-demo.yml'
+  workflow_dispatch:
+
+jobs:
+  smoke-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install demo dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r demo/requirements-falling-walls.txt
+      - name: Compile demo
+        run: python -m py_compile demo/falling_walls_demo.py tapf/formal_privacy.py
+      - name: Import demo and verify frozen evidence
+        run: |
+          python - <<'PY'
+          import demo.falling_walls_demo as d
+          assert d.FROZEN_RESULTS['TAPF-MIN v2.1 frozen validation']['release_decision'] == 'BLOCK'
+          assert d._rr_expected_accuracy(1.0, 6) > 0.0
+          print('Falling Walls demo smoke test passed')
+          PY
