@@ -4,15 +4,29 @@
 
 This demo presents the TAPF-MIN minimum-disclosure release architecture without fabricating FER performance. It uses the repository's real randomized-response mechanism and the frozen reported research measurements.
 
-## One-click Windows launch
+## Preferred Falling Walls launch — standalone Windows executable
 
-Double-click:
+Download the GitHub Actions artifact named:
+
+`TAPF-MIN-Falling-Walls-Windows`
+
+Extract it, then double-click:
+
+`TAPF-MIN-Falling-Walls.exe`
+
+No separate Python installation is required on the presentation laptop. The executable starts a local Streamlit server on `127.0.0.1` and opens the demo in the default browser.
+
+For presentation safety, test the executable once on the exact laptop you will take to the venue and keep the extracted folder locally rather than launching it from a cloud-synced folder.
+
+## Source-mode fallback on Windows
+
+If needed, double-click:
 
 `demo/run_falling_walls_demo.bat`
 
 The first run installs the small presentation dependencies and opens the Streamlit app in a browser.
 
-## macOS/Linux launch
+## macOS/Linux source-mode launch
 
 ```bash
 bash demo/run_falling_walls_demo.sh
@@ -59,6 +73,16 @@ bash demo/run_falling_walls_demo.sh
 - delayed identity adversary
 - fail-closed prevalidation gate
 - final FER/privacy benchmark: **not yet claimed**
+
+## Build verification
+
+The GitHub Actions Windows job must:
+
+1. build `TAPF-MIN-Falling-Walls.exe` with PyInstaller;
+2. verify that the executable exists;
+3. launch the executable on Windows;
+4. verify the local interface returns HTTP 200;
+5. upload the tested executable as the `TAPF-MIN-Falling-Walls-Windows` artifact.
 
 ## What can be said on stage
 
