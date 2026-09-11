@@ -1,18 +1,28 @@
 # -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
 from PyInstaller.utils.hooks import collect_all
 
-datas, binaries, hiddenimports = collect_all('streamlit')
+SPEC_DIR = Path(__file__).resolve().parent
+REPO_ROOT = SPEC_DIR.parent
+
+streamlit_datas, streamlit_binaries, streamlit_hidden = collect_all('streamlit')
 np_datas, np_binaries, np_hidden = collect_all('numpy')
-datas += np_datas
-binaries += np_binaries
-hiddenimports += np_hidden
+
+datas = streamlit_datas + np_datas + [
+    (str(SPEC_DIR / 'falling_walls_demo.py'), 'demo'),
+    (str(REPO_ROOT / 'tapf'), 'tapf'),
+]
+binaries = streamlit_binaries + np_binaries
+hiddenimports = streamlit_hidden + np_hidden + [
+    'tapf.formal_privacy',
+]
 
 a = Analysis(
-    ['demo/standalone_launcher.py'],
-    pathex=['.'],
+    [str(SPEC_DIR / 'standalone_launcher.py')],
+    pathex=[str(REPO_ROOT)],
     binaries=binaries,
-    datas=datas + [('demo/falling_walls_demo.py', 'demo')],
-    hiddenimports=hiddenimports + ['tapf.formal_privacy'],
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
