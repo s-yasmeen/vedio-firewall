@@ -2,10 +2,11 @@
 
 This compatibility module retains the v2 normalized-risk interface used by earlier
 prototype tests and clients. The scientifically preferred chance-centered v2.2 gate
-lives in ``tapf.deployment_v22`` and is exposed by ``/v22/release/evaluate``.
+lives in ``tapf.deployment_v22``.
 
-Keeping the compatibility thresholds separate avoids silently changing the meaning of
-legacy risk fields while allowing the v2.2 endpoint to enforce direct AUC/F1 evidence.
+The task registry is the single source of truth for task-aware disclosure. Unknown
+clinical tasks fail closed: TAPF-MIN must never fall back to protected video merely
+because a task was not recognized.
 """
 from __future__ import annotations
 from dataclasses import dataclass, asdict
@@ -35,19 +36,83 @@ class BoundedEvidence:
     sample_count: int = 0
 
 
+TASK_REGISTRY = {
+    "emotion": {
+        "label": "Expression / emotion assessment",
+        "purpose_example": "Assess affective facial expression without requiring raw identity",
+        "representations": ("action-units", "expression-embedding", "protected-video"),
+        "preferred_representation": "action-units",
+        "side": "clinical-assessment",
+    },
+    "facial-expression": {
+        "label": "Facial expression assessment",
+        "purpose_example": "Measure task-relevant facial action patterns",
+        "representations": ("action-units", "expression-embedding", "protected-video"),
+        "preferred_representation": "action-units",
+        "side": "clinical-assessment",
+    },
+    "movement": {
+        "label": "Facial / motor movement assessment",
+        "purpose_example": "Assess task-relevant movement while minimizing identity disclosure",
+        "representations": ("landmark-trajectories", "motion-features", "protected-video"),
+        "preferred_representation": "motion-features",
+        "side": "clinical-assessment",
+    },
+    "neurology-motion": {
+        "label": "Neurological movement assessment",
+        "purpose_example": "Assess clinically relevant facial or motor dynamics",
+        "representations": ("landmark-trajectories", "motion-features", "protected-video"),
+        "preferred_representation": "motion-features",
+        "side": "clinical-assessment",
+    },
+    "rppg": {
+        "label": "Remote physiological signal (rPPG)",
+        "purpose_example": "Estimate a permitted physiological signal without transmitting raw face video",
+        "representations": ("physiological-signal", "protected-video"),
+        "preferred_representation": "physiological-signal",
+        "side": "clinical-assessment",
+    },
+    "authentication": {
+        "label": "Patient authentication",
+        "purpose_example": "Verify the enrolled patient using a protected cancelable biometric template",
+        "representations": ("cancelable-template",),
+        "preferred_representation": "cancelable-template",
+        "side": "identity-verification",
+    },
+    "clinician-visual": {
+        "label": "Clinician visual examination",
+        "purpose_example": "Permit clinician viewing only when a visual video representation is necessary",
+        "representations": ("protected-video",),
+        "preferred_representation": "protected-video",
+        "side": "human-visual-review",
+    },
+}
+
+# Backward-compatible map for callers that only need representation tuples.
 TASK_REPRESENTATIONS = {
-    "facial-expression": ("action-units", "expression-embedding", "protected-video"),
-    "emotion": ("action-units", "expression-embedding", "protected-video"),
-    "movement": ("landmark-trajectories", "motion-features", "protected-video"),
-    "neurology-motion": ("landmark-trajectories", "motion-features", "protected-video"),
-    "rppg": ("physiological-signal", "protected-video"),
-    "authentication": ("cancelable-template",),
-    "clinician-visual": ("protected-video",),
+    task: tuple(spec["representations"]) for task, spec in TASK_REGISTRY.items()
 }
 
 
+def task_registry() -> dict:
+    """Return serializable task metadata for doctor-side request construction."""
+    return {
+        task: {
+            **{k: v for k, v in spec.items() if k != "representations"},
+            "representations": list(spec["representations"]),
+        }
+        for task, spec in TASK_REGISTRY.items()
+    }
+
+
+def is_known_task(task: str) -> bool:
+    return task.strip().lower() in TASK_REGISTRY
+
+
 def allowed_representations(task: str) -> tuple[str, ...]:
-    return TASK_REPRESENTATIONS.get(task.strip().lower(), ("protected-video",))
+    """Return permitted representations; unknown tasks fail closed with no options."""
+    spec = TASK_REGISTRY.get(task.strip().lower())
+    return tuple(spec["representations"]) if spec else ()
 
 
 def representation_rank(task: str, representation: str) -> int:
@@ -84,6 +149,14 @@ def select_minimum_release(task: str, representation: str,
                            policy: DeploymentPolicy) -> dict:
     """Choose the least-disclosing valid operating point."""
     allowed = allowed_representations(task)
+    if not allowed:
+        return {
+            "decision": "BLOCK",
+            "reason": "unknown_or_unauthorized_task",
+            "selected_alpha": None,
+            "allowed_representations": (),
+            "history": [],
+        }
     if representation not in allowed:
         return {
             "decision": "BLOCK",
