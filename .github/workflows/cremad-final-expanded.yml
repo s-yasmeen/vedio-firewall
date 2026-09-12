@@ -1,20 +1,17 @@
-name: TAPF-MIN final validation
+name: TAPF-MIN expanded CREMA-D validation
 
 on:
+  workflow_dispatch:
   push:
     branches: [tapf-min-v2-1]
     paths:
-      - 'experiments/run_cremad_v21_adversarial.py'
       - 'experiments/run_cremad_final_validation.py'
-      - 'tapf/minimum_representation.py'
-      - 'experiments/run_cremad_privacy_utility_spectrum.py'
-      - '.github/workflows/cremad-minimum-representation.yml'
-  workflow_dispatch:
+      - '.github/workflows/cremad-final-expanded.yml'
 
 jobs:
-  final-validation:
+  expanded-validation:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 180
     env:
       PYTHONPATH: ${{ github.workspace }}
     steps:
@@ -27,26 +24,23 @@ jobs:
           python -m pip install --upgrade pip
           pip install numpy scikit-learn opencv-python-headless
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-      - name: Fetch bounded CREMA-D DFA subset via Git LFS
+      - name: Fetch expanded CREMA-D DFA cohort via Git LFS
         run: |
           git lfs install
           rm -rf /tmp/crema-d
           cd /tmp
           GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 https://github.com/CheyneyComputerScience/CREMA-D.git crema-d
           cd crema-d
-          INCLUDE=""
-          for id in $(seq 1001 1024); do
-            if [ -n "$INCLUDE" ]; then INCLUDE="$INCLUDE,"; fi
-            INCLUDE="${INCLUDE}VideoFlash/${id}_DFA_*.flv"
-          done
-          git lfs pull --include="$INCLUDE"
+          git lfs pull --include='VideoFlash/*_DFA_*.flv'
           count=$(find VideoFlash -maxdepth 1 -type f -name '*_DFA_*.flv' -size +1000c | wc -l)
-          echo "Fetched real video clips: $count"
-          test "$count" -ge 120
-      - name: Run consolidated final validation
+          actors=$(find VideoFlash -maxdepth 1 -type f -name '*_DFA_*.flv' -size +1000c -printf '%f\n' | cut -d_ -f1 | sort -u | wc -l)
+          echo "Fetched DFA clips: $count across actors: $actors"
+          test "$count" -ge 500
+          test "$actors" -ge 80
+      - name: Run frozen final-validation protocol on expanded cohort
         run: python experiments/run_cremad_final_validation.py /tmp/crema-d/VideoFlash
-      - name: Upload final validation metrics
+      - name: Upload expanded final validation metrics
         uses: actions/upload-artifact@v4
         with:
-          name: cremad-final-validation
+          name: cremad-final-expanded
           path: results/cremad_final_validation.json

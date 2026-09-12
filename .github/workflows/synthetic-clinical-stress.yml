@@ -1,0 +1,36 @@
+name: TAPF-MIN synthetic clinical-like stress validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [tapf-min-v2-1]
+    paths:
+      - 'experiments/run_synthetic_clinical_stress.py'
+      - 'tapf/privacy_gate_v22.py'
+      - 'tapf/deployment_v22.py'
+      - '.github/workflows/synthetic-clinical-stress.yml'
+
+jobs:
+  synthetic-clinical-stress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy scikit-learn opencv-python-headless torch
+      - name: Run synthetic clinical-like privacy utility stress benchmark
+        run: python experiments/run_synthetic_clinical_stress.py --seed 42
+      - name: Upload benchmark evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: synthetic-clinical-stress-v22
+          path: results/synthetic_clinical_stress_v22.json
+
+# Reproducibility trigger: synthetic stress evidence is generated from a fixed seed and frozen v2.2 gate.

@@ -1,0 +1,45 @@
+name: TAPF-MIN v2.3 identity-invariant validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [tapf-min-v2-1]
+    paths:
+      - 'experiments/run_cremad_v23_identity_invariant.py'
+      - 'tapf/privacy_amplification.py'
+      - 'tapf/privacy_gate_v22.py'
+      - 'tests/test_privacy_amplification.py'
+      - '.github/workflows/cremad-v23-identity-invariant.yml'
+
+jobs:
+  v23-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy scikit-learn opencv-python-headless torch pytest
+      - name: Unit-test privacy amplification
+        run: pytest -q tests/test_privacy_amplification.py
+      - name: Fetch CREMA-D DFA cohort via Git LFS
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-lfs
+          git lfs install
+          git clone --depth 1 https://github.com/CheyneyComputerScience/CREMA-D.git /tmp/CREMA-D
+          cd /tmp/CREMA-D
+          git lfs pull --include='VideoFlash/*.flv'
+      - name: Run v2.3 identity-invariant benchmark
+        run: python experiments/run_cremad_v23_identity_invariant.py /tmp/CREMA-D/VideoFlash --folds 5 --seed 42
+      - name: Upload v2.3 evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: cremad-v23-identity-invariant
+          path: results/cremad_v23_identity_invariant.json
