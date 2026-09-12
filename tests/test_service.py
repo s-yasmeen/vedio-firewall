@@ -16,6 +16,8 @@ def test_healthz_is_fail_closed_and_no_raw_ingestion():
     assert data['status']=='ok' and data['fail_closed'] is True
     assert data['raw_biometric_ingestion'] is False and data['bounded_release_api'] is True
     assert data['composition_guard'] is True and data['v22_chance_centered_gate'] is True
+    assert data['two_sided_task_authorization'] is True
+    assert data['preferred_release_endpoint']=='/v23/authorized-release/evaluate'
 
 
 def test_readyz_requires_security_configuration(monkeypatch):
@@ -89,6 +91,59 @@ def test_v22_strict_gate_releases_only_when_all_constraints_pass():
 def test_v22_blocks_repeated_release_leakage():
     data=client.post('/v22/release/evaluate',json=_v22_payload(repeated_release_auc=0.64),headers=_auth_headers()).json()
     assert data['decision']=='BLOCK'
+
+
+def _v23_payload(*, patient_authorized=True, representation='motion-features', repeated_release_auc=0.53):
+    now=datetime.now(timezone.utc)
+    return {
+      'request_id':'v23-unit-request',
+      'contract':{
+        'session_id':'session-001','task':'movement','purpose':'assess facial movement',
+        'recipient_id':'clinic-a','requested_representation':representation,
+        'patient_authorized':patient_authorized,'issued_at':now.isoformat(),
+        'expires_at':(now+timedelta(minutes=15)).isoformat(),
+      },
+      'measured_at':now.isoformat(),
+      'operating_points':[{
+        'alpha':0.5,'clip_auc_ci95_low':0.48,'clip_auc_ci95_high':0.54,
+        'repeated_release_auc':repeated_release_auc,
+        'task_f1_ci95_low':0.24,'task_f1_ci95_high':0.31,
+        'attacker_aucs':[0.51,0.52,0.49,0.53],'latency_ms':80,
+        'evaluator_id':'v23-ensemble','sample_count':200,
+      }],
+    }
+
+
+def _v23_headers(recipient='clinic-a'):
+    headers=_auth_headers(); headers['X-TAPF-Recipient-ID']=recipient; return headers
+
+
+def test_v23_two_sided_authorized_request_can_release():
+    r=client.post('/v23/authorized-release/evaluate',json=_v23_payload(),headers=_v23_headers())
+    assert r.status_code==200; data=r.json()
+    assert data['decision']=='RELEASE' and data['task_authorization_pass'] is True
+    assert data['two_sided_task_authorization'] is True
+    assert data['attestation']['purpose']=='assess facial movement'
+    assert data['attestation']['recipient_id']=='clinic-a'
+    assert data['attestation']['patient_authorized'] is True
+    assert len(data['contract_sha256'])==64 and len(data['evidence_sha256'])==64
+
+
+def test_v23_patient_denial_blocks_good_evidence():
+    data=client.post('/v23/authorized-release/evaluate',json=_v23_payload(patient_authorized=False),headers=_v23_headers()).json()
+    assert data['decision']=='BLOCK' and data['reason']=='task_authorization_contract_failed'
+    assert data['attestation']['authorization_checks']['patient_authorized'] is False
+
+
+def test_v23_recipient_binding_mismatch_blocks():
+    data=client.post('/v23/authorized-release/evaluate',json=_v23_payload(),headers=_v23_headers('clinic-b')).json()
+    assert data['decision']=='BLOCK' and data['reason']=='task_authorization_contract_failed'
+    assert data['attestation']['authorization_checks']['recipient_bound'] is False
+
+
+def test_v23_authorization_cannot_override_repeated_release_failure():
+    data=client.post('/v23/authorized-release/evaluate',json=_v23_payload(repeated_release_auc=0.64),headers=_v23_headers()).json()
+    assert data['decision']=='BLOCK' and data['task_authorization_pass'] is True
 
 
 def test_v2_rejects_representation_not_allowed_for_authentication():
