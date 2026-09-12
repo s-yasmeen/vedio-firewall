@@ -48,3 +48,5 @@ jobs:
         with:
           name: cremad-v24-composition-aware
           path: results/cremad_v24_composition_aware.json
+
+# Scientific protocol trigger only: frozen gate and model settings unchanged.
