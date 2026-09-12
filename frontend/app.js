@@ -22,7 +22,7 @@ async function refreshHealth(){
   try{
     const h=await fetchJSON('/healthz');
     $('#serviceState').textContent=h.status==='ok'?'ONLINE':'DEGRADED';
-    badge.textContent=h.v22_chance_centered_gate?'v2.2 gate online':'Service online'; badge.className='badge '+(h.status==='ok'?'ok':'warn');
+    badge.textContent=h.two_sided_task_authorization?'Task-aware gate online':'Service online'; badge.className='badge '+(h.status==='ok'?'ok':'warn');
     try{await fetchJSON('/readyz');$('#readyState').textContent='READY'}catch{$('#readyState').textContent='NOT READY'}
   }catch(e){
     $('#serviceState').textContent='OFFLINE';$('#readyState').textContent='—';badge.textContent='Service offline';badge.className='badge danger';
@@ -67,11 +67,22 @@ $('#task').addEventListener('change',loadRepresentations);
 
 function n(id){return Number($(id).value)}
 function isoNow(){return new Date().toISOString()}
+function isoInMinutes(minutes){return new Date(Date.now()+minutes*60000).toISOString()}
 function attackerAucs(){return $('#attackerAucs').value.split(',').map(x=>Number(x.trim())).filter(x=>Number.isFinite(x));}
 function requestPayload(){
+  const task=$('#task').value;
+  const representation=$('#representation').value;
   return {
-    task:$('#task').value,
-    representation:$('#representation').value,
+    contract:{
+      session_id:$('#sessionId').value.trim(),
+      task,
+      purpose:$('#purpose').value.trim(),
+      recipient_id:$('#recipientId').value.trim(),
+      requested_representation:representation,
+      patient_authorized:$('#patientAuthorized').value==='true',
+      issued_at:isoNow(),
+      expires_at:isoInMinutes(15)
+    },
     measured_at:isoNow(),
     max_evidence_age_seconds:300,
     max_identity_advantage:n('#identityAdvantageThreshold'),
@@ -95,7 +106,10 @@ function validatePayload(p){
   const o=p.operating_points[0];
   const vals=[p.max_identity_advantage,p.min_task_f1_lower_ci,p.latency_ms_threshold,o.alpha,o.clip_auc_ci95_low,o.clip_auc_ci95_high,o.repeated_release_auc,o.task_f1_ci95_low,o.task_f1_ci95_high,o.latency_ms,...o.attacker_aucs];
   if(vals.some(v=>!Number.isFinite(v)))return 'All numeric evidence must contain valid numbers.';
-  if(!p.representation)return 'Select an authorized representation.';
+  if(!p.contract.session_id)return 'Session ID is required.';
+  if(!p.contract.purpose)return 'Clinical purpose is required.';
+  if(!p.contract.recipient_id)return 'Recipient ID is required.';
+  if(!p.contract.requested_representation)return 'Select an authorized representation.';
   if(o.clip_auc_ci95_low>o.clip_auc_ci95_high)return 'Clip AUC CI low cannot exceed CI high.';
   if(o.task_f1_ci95_low>o.task_f1_ci95_high)return 'Task F1 CI low cannot exceed CI high.';
   if(!o.attacker_aucs.length)return 'Provide at least one independent attacker AUC.';
@@ -107,23 +121,31 @@ function renderDecision(d){
   const release=String(d.decision||d.release_decision||'').toUpperCase()==='RELEASE';
   $('#decisionIcon').textContent=release?'✓':'×';$('#decisionIcon').className='decision-icon '+(release?'ok':'danger');
   $('#decisionTitle').textContent=release?'Release authorized':'Release blocked';
-  $('#decisionReason').textContent=d.reason||(release?'All v2.2 privacy, utility and latency bounds passed.':'One or more v2.2 release conditions failed.');
-  $('#selectedAlpha').textContent=d.selected_alpha??'—';$('#selectedRep').textContent=d.representation||'—';$('#evidenceHash').textContent=shortHash(d.evidence_sha256);$('#requestId').textContent=d.request_id||'—';$('#riskRingValue').textContent=release?'PASS':'BLOCK';
+  $('#decisionReason').textContent=d.reason||(release?'Task authorization and all privacy–utility bounds passed.':'Authorization or one of the release conditions failed.');
+  $('#selectedAlpha').textContent=d.selected_alpha??'—';
+  $('#selectedRep').textContent=d.representation||'—';
+  $('#selectedPurpose').textContent=d.purpose||d.attestation?.purpose||'—';
+  $('#selectedRecipient').textContent=d.recipient_id||d.attestation?.recipient_id||'—';
+  $('#contractHash').textContent=shortHash(d.contract_sha256||d.attestation?.contract_sha256);
+  $('#evidenceHash').textContent=shortHash(d.evidence_sha256);
+  $('#requestId').textContent=d.request_id||'—';
+  $('#riskRingValue').textContent=release?'PASS':'BLOCK';
 }
-function addHistory(d){const att=d.attestation||{};state.history.unshift({decision:d.decision||att.release_decision||'BLOCK',task:d.task||att.task||'—',representation:d.representation||att.representation||'—',request_id:d.request_id||att.request_id||'—',time:att.timestamp_utc||isoNow()});state.history=state.history.slice(0,12);renderHistory();}
-function renderHistory(){const root=$('#attestationList');root.innerHTML='';if(!state.history.length){root.innerHTML='<article class="panel empty">No release evaluations in this session.</article>';return}state.history.forEach(a=>{const card=document.createElement('article');const rel=String(a.decision).toUpperCase()==='RELEASE';card.className='panel attestation-card '+(rel?'release':'block');card.innerHTML=`<span class="attestation-dot" aria-hidden="true"></span><div><strong>${rel?'RELEASE':'BLOCK'} · ${escapeHTML(a.task)}</strong><small>${escapeHTML(a.representation)} · ${escapeHTML(a.request_id)}</small></div><time>${new Date(a.time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</time>`;root.appendChild(card)});}
+function addHistory(d){const att=d.attestation||{};state.history.unshift({decision:d.decision||att.release_decision||'BLOCK',task:d.task||att.task||'—',representation:d.representation||att.representation||'—',purpose:d.purpose||att.purpose||'—',recipient:d.recipient_id||att.recipient_id||'—',request_id:d.request_id||att.request_id||'—',time:att.timestamp_utc||isoNow()});state.history=state.history.slice(0,12);renderHistory();}
+function renderHistory(){const root=$('#attestationList');root.innerHTML='';if(!state.history.length){root.innerHTML='<article class="panel empty">No release evaluations in this session.</article>';return}state.history.forEach(a=>{const card=document.createElement('article');const rel=String(a.decision).toUpperCase()==='RELEASE';card.className='panel attestation-card '+(rel?'release':'block');card.innerHTML=`<span class="attestation-dot" aria-hidden="true"></span><div><strong>${rel?'RELEASE':'BLOCK'} · ${escapeHTML(a.task)}</strong><small>${escapeHTML(a.purpose)} → ${escapeHTML(a.recipient)} · ${escapeHTML(a.representation)}</small></div><time>${new Date(a.time).toLocaleTimeString([], {hour:'2-digit',minute:'2-digit'})}</time>`;root.appendChild(card)});}
 function escapeHTML(s){return String(s).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]))}
 $('#clearHistory').addEventListener('click',()=>{state.history=[];renderHistory()});
 
 $('#releaseForm').addEventListener('submit',async e=>{
   e.preventDefault();const msg=$('#formMessage');const p=requestPayload(),err=validatePayload(p);if(err){msg.textContent=err;return}
-  msg.textContent='Running chance-centered v2.2 privacy–utility gate…';const key=$('#apiKey').value.trim();
-  try{const d=await fetchJSON('/v22/release/evaluate',{method:'POST',headers:key?{Authorization:`Bearer ${key}`}:{},body:JSON.stringify(p)});renderDecision(d);addHistory(d);msg.textContent='v2.2 evaluation complete.'}
-  catch(ex){renderDecision({decision:'BLOCK',reason:`Service rejected request: ${ex.message}`,representation:p.representation});msg.textContent='Fail-closed: request was not released.'}
+  msg.textContent='Validating doctor request, patient authorization and privacy–utility evidence…';const key=$('#apiKey').value.trim();
+  const headers={'X-TAPF-Recipient-ID':p.contract.recipient_id}; if(key)headers.Authorization=`Bearer ${key}`;
+  try{const d=await fetchJSON('/v23/authorized-release/evaluate',{method:'POST',headers,body:JSON.stringify(p)});renderDecision(d);addHistory(d);msg.textContent='Task-aware evaluation complete.'}
+  catch(ex){renderDecision({decision:'BLOCK',reason:`Service rejected request: ${ex.message}`,representation:p.contract.requested_representation,purpose:p.contract.purpose,recipient_id:p.contract.recipient_id});msg.textContent='Fail-closed: request was not released.'}
 });
 $('#loadBlocked').addEventListener('click',()=>{
   $('#clipAucLow').value='0.61';$('#clipAucHigh').value='0.69';$('#repeatedAuc').value='0.72';$('#taskF1Low').value='0.24';$('#taskF1High').value='0.32';$('#attackerAucs').value='0.63,0.67,0.59,0.71';$('#latency').value='80';
-  $('#formMessage').textContent='Loaded an identity-leakage example. Run the v2.2 gate to confirm BLOCK.';
+  $('#formMessage').textContent='Loaded an identity-leakage example. The task may be authorized, but the patient-side firewall must still BLOCK it.';
 });
 
 window.addEventListener('beforeinstallprompt',e=>{e.preventDefault();state.installPrompt=e;$('#installBtn').classList.remove('hidden')});
