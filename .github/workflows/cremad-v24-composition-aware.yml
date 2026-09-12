@@ -1,0 +1,50 @@
+name: TAPF-MIN v2.4 composition-aware validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [tapf-min-v2-1]
+    paths:
+      - 'experiments/run_cremad_v24_composition_aware.py'
+      - 'tests/test_v24_composition_aware.py'
+      - 'tapf/privacy_gate_v22.py'
+      - '.github/workflows/cremad-v24-composition-aware.yml'
+
+jobs:
+  v24-validation:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install numpy scikit-learn opencv-python-headless torch pytest
+      - name: Unit-test v2.4 composition-aware controls
+        run: pytest -q tests/test_v24_composition_aware.py tests/test_privacy_gate_v22.py
+      - name: Fetch CREMA-D DFA cohort via Git LFS
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git-lfs
+          git lfs install
+          rm -rf /tmp/CREMA-D
+          GIT_LFS_SKIP_SMUDGE=1 git clone --depth 1 https://github.com/CheyneyComputerScience/CREMA-D.git /tmp/CREMA-D
+          cd /tmp/CREMA-D
+          git lfs pull --include='VideoFlash/*_DFA_*.flv'
+          count=$(find VideoFlash -maxdepth 1 -type f -name '*_DFA_*.flv' -size +1000c | wc -l)
+          actors=$(find VideoFlash -maxdepth 1 -type f -name '*_DFA_*.flv' -size +1000c -printf '%f\n' | cut -d_ -f1 | sort -u | wc -l)
+          echo "Fetched DFA clips: $count across actors: $actors"
+          test "$count" -ge 500
+          test "$actors" -ge 80
+      - name: Run v2.4 composition-aware benchmark
+        run: python experiments/run_cremad_v24_composition_aware.py /tmp/CREMA-D/VideoFlash --folds 5 --seed 42
+      - name: Upload v2.4 evidence
+        uses: actions/upload-artifact@v4
+        with:
+          name: cremad-v24-composition-aware
+          path: results/cremad_v24_composition_aware.json
