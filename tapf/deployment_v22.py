@@ -11,6 +11,7 @@ from typing import Sequence
 
 from tapf.deployment import allowed_representations
 from tapf.privacy_gate_v22 import V22PrivacyPolicy, evaluate_v22_gate
+from tapf.task_contract import TaskAuthorizationContract, validate_task_contract
 
 
 @dataclass(frozen=True)
@@ -98,3 +99,38 @@ def select_v22_release(task: str, representation: str,
         "history": history,
         "allowed_representations": allowed,
     }
+
+
+def select_authorized_v22_release(contract: TaskAuthorizationContract,
+                                  evidence: Sequence[V22BoundedEvidence],
+                                  *,
+                                  expected_recipient_id: str | None = None,
+                                  policy: V22DeploymentPolicy | None = None) -> dict:
+    """Apply two-sided task authorization before the empirical release gate.
+
+    Doctor/clinical side declares task, purpose, recipient and requested representation.
+    Patient side must explicitly authorize the contract. Only then can the standard
+    privacy/utility/repeated-release evidence gate evaluate the proposed release.
+    """
+    contract_result = validate_task_contract(
+        contract,
+        expected_recipient_id=expected_recipient_id,
+    )
+    if not contract_result["authorized"]:
+        return {
+            "decision": "BLOCK",
+            "reason": "task_authorization_contract_failed",
+            "selected_alpha": None,
+            "contract": contract_result,
+            "history": [],
+        }
+
+    result = select_v22_release(
+        contract_result["task"],
+        contract_result["requested_representation"],
+        evidence,
+        policy,
+    )
+    result["contract"] = contract_result
+    result["task_authorization_pass"] = True
+    return result
